@@ -1,0 +1,13 @@
+node_modules
+.git
+.env
+data
+sessions
+frontend
+src
+docker
+nodemon
+nodemon.json
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

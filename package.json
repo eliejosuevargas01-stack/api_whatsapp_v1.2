@@ -1,0 +1,27 @@
+{
+  "name": "api-whatsapp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Painel web e API WhatsApp prontos para deploy no Coolify.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@fastify/rate-limit": "^9.1.0",
+    "@fastify/static": "^6.12.0",
+    "@whiskeysockets/baileys": "^6.7.8",
+    "dotenv": "^16.4.5",
+    "fastify": "^4.28.1",
+    "pino": "^9.3.2",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  }
+}

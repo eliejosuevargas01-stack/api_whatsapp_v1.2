@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chat WhatsApp</title>
+    <link rel="stylesheet" href="/styles.css?v=20260317-7" />
+  </head>
+  <body class="chat-page">
+    <div class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Painel local</p>
+          <h1>Conversas</h1>
+        </div>
+
+        <div class="topbar-actions">
+          <label class="session-picker">
+            <span>Sessao</span>
+            <select id="sessionSelect"></select>
+          </label>
+          <span id="sessionStatus" class="status-pill status-idle">inativa</span>
+          <a class="action-link" href="/sessoes">Gerenciar sessoes</a>
+        </div>
+      </header>
+
+      <main class="chat-layout">
+        <aside class="sidebar panel">
+          <div class="panel-head">
+            <div>
+              <h2>Lista</h2>
+              <p class="muted">O foco da tela principal fica nas conversas.</p>
+            </div>
+            <button id="refreshConversationsButton" class="action-button secondary" type="button">
+              Atualizar
+            </button>
+          </div>
+
+          <input
+            id="conversationSearchInput"
+            type="search"
+            placeholder="Buscar por nome, numero ou trecho"
+            autocomplete="off"
+          />
+
+          <div id="conversationList" class="conversation-list">
+            <p class="empty">Selecione uma sessao para carregar as conversas.</p>
+          </div>
+        </aside>
+
+        <section class="chat-panel panel">
+          <div class="chat-header">
+            <div>
+              <h2 id="conversationTitle">Selecione uma conversa</h2>
+              <p id="conversationMeta" class="muted">Escolha uma conversa na lateral para abrir o historico.</p>
+            </div>
+            <p id="chatNotice" class="notice"></p>
+          </div>
+
+          <div id="messageList" class="message-list">
+            <p class="empty">Nenhuma conversa carregada.</p>
+          </div>
+
+          <form id="composerForm" class="composer">
+            <textarea
+              id="composerInput"
+              rows="3"
+              placeholder="Digite uma mensagem ou use como legenda do arquivo"
+            ></textarea>
+
+            <div class="composer-toolbar">
+              <label class="action-button secondary file-button" for="composerFileInput">
+                Anexar
+              </label>
+              <input id="composerFileInput" type="file" hidden />
+
+              <select id="composerMediaKind">
+                <option value="auto">Arquivo: auto</option>
+                <option value="image">Imagem</option>
+                <option value="video">Video</option>
+                <option value="audio">Audio</option>
+                <option value="document">Documento</option>
+                <option value="sticker">Sticker</option>
+              </select>
+
+              <div id="composerFileChip" class="file-chip" hidden>
+                <span id="composerFileName">Nenhum arquivo</span>
+                <button id="composerClearFileButton" type="button" class="chip-clear">remover</button>
+              </div>
+
+              <button id="sendButton" class="action-button" type="submit">Enviar</button>
+            </div>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/app.js?v=20260317-8"></script>
+  </body>
+</html>

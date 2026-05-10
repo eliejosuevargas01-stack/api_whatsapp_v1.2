@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sessoes WhatsApp</title>
+    <link rel="stylesheet" href="/styles.css?v=20260317-7" />
+  </head>
+  <body class="sessions-page">
+    <div class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Painel local</p>
+          <h1>Sessoes</h1>
+        </div>
+
+        <div class="topbar-actions">
+          <a class="action-link" href="/">Abrir conversas</a>
+        </div>
+      </header>
+
+      <main class="sessions-layout">
+        <aside class="panel session-list-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Dispositivos</h2>
+              <p class="muted">QR Code e conexao ficam isolados aqui.</p>
+            </div>
+            <button id="refreshSessionsButton" class="action-button secondary" type="button">
+              Atualizar
+            </button>
+          </div>
+
+          <form id="sessionForm" class="inline-form">
+            <input
+              id="sessionNameInput"
+              type="text"
+              name="name"
+              placeholder="Ex: iphone-atendimento"
+              autocomplete="off"
+            />
+            <button class="action-button" type="submit">Nova sessao</button>
+          </form>
+
+          <div id="sessionList" class="session-list">
+            <p class="empty">Carregando sessoes...</p>
+          </div>
+        </aside>
+
+        <div class="sessions-workspace">
+          <section class="panel session-detail-panel">
+            <div class="panel-head">
+              <div>
+                <h2 id="sessionTitle">Nenhuma sessao selecionada</h2>
+                <p id="sessionSubtitle" class="muted">Escolha uma sessao para ver QR e status.</p>
+              </div>
+              <span id="sessionStatus" class="status-pill status-idle">inativa</span>
+            </div>
+
+            <p id="sessionNote" class="notice"></p>
+
+            <div class="session-detail-grid">
+              <div class="qr-stage" id="qrFrame">
+                <p class="empty">O QR aparece aqui somente quando voce clicar em conectar.</p>
+              </div>
+
+              <div class="session-side">
+                <dl class="stats-grid">
+                  <div>
+                    <dt>Conta</dt>
+                    <dd id="sessionAccount">-</dd>
+                  </div>
+                  <div>
+                    <dt>Conversas</dt>
+                    <dd id="sessionConversationCount">0</dd>
+                  </div>
+                  <div>
+                    <dt>Mensagens</dt>
+                    <dd id="sessionMessageCount">0</dd>
+                  </div>
+                  <div>
+                    <dt>Nao lidas</dt>
+                    <dd id="sessionUnreadCount">0</dd>
+                  </div>
+                </dl>
+
+                <div class="action-row">
+                  <button id="connectButton" class="action-button" type="button">Conectar / gerar QR</button>
+                  <button id="logoutButton" class="action-button secondary" type="button">Resetar sessao</button>
+                  <button id="deleteButton" class="action-button danger" type="button">Excluir sessao</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel settings-panel">
+            <div class="panel-head">
+              <div>
+                <h2>Configuracoes da sessao</h2>
+                <p class="muted">Webhook e filtros exclusivos da sessao selecionada.</p>
+              </div>
+            </div>
+
+            <form id="settingsForm" class="settings-form">
+              <label class="setting-toggle">
+                <input id="webhookEnabledInput" type="checkbox" />
+                <span class="setting-copy">
+                  <strong>Ativar webhook</strong>
+                  <small>Entrega mensagens novas para a URL configurada abaixo.</small>
+                </span>
+              </label>
+
+              <label class="field-group">
+                <span>URL do webhook</span>
+                <input
+                  id="webhookUrlInput"
+                  type="url"
+                  placeholder="https://seu-n8n.exemplo/webhook/whatsapp"
+                  autocomplete="off"
+                />
+              </label>
+
+              <label class="field-group">
+                <span>Segredo opcional</span>
+                <input
+                  id="webhookSecretInput"
+                  type="text"
+                  placeholder="Vai no header X-Webhook-Secret"
+                  autocomplete="off"
+                />
+              </label>
+
+              <div class="field-group">
+                <span>Entregar mensagens de</span>
+
+                <div class="settings-grid">
+                  <label class="setting-toggle compact">
+                    <input id="allowPrivateInput" type="checkbox" />
+                    <span class="setting-copy">
+                      <strong>Conversas privadas</strong>
+                      <small>Numeros e contatos comuns.</small>
+                    </span>
+                  </label>
+
+                  <label class="setting-toggle compact">
+                    <input id="allowGroupsInput" type="checkbox" />
+                    <span class="setting-copy">
+                      <strong>Grupos</strong>
+                      <small>Mensagens recebidas em grupos.</small>
+                    </span>
+                  </label>
+
+                  <label class="setting-toggle compact">
+                    <input id="allowNewslettersInput" type="checkbox" />
+                    <span class="setting-copy">
+                      <strong>Newsletters</strong>
+                      <small>Canais e newsletters do WhatsApp.</small>
+                    </span>
+                  </label>
+
+                  <label class="setting-toggle compact">
+                    <input id="allowBroadcastsInput" type="checkbox" />
+                    <span class="setting-copy">
+                      <strong>Broadcast</strong>
+                      <small>Status e listas de transmissao.</small>
+                    </span>
+                  </label>
+
+                  <label class="setting-toggle compact full-span">
+                    <input id="includeFromMeInput" type="checkbox" />
+                    <span class="setting-copy">
+                      <strong>Mensagens enviadas por mim</strong>
+                      <small>Inclui mensagens de saida e respostas disparadas pela API.</small>
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="settings-footer">
+                <button id="saveSettingsButton" class="action-button" type="submit">
+                  Salvar configuracoes
+                </button>
+                <p id="settingsNote" class="notice">
+                  Selecione uma sessao para editar o webhook dela.
+                </p>
+              </div>
+            </form>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <script type="module" src="/sessions.js?v=20260429-1"></script>
+  </body>
+</html>
