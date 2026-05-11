@@ -140,12 +140,9 @@ await Promise.all([
   persistContacts(),
 ]);
 
-const messageIndex = new Set();
-for (const sessionMessages of Object.values(stores.messages.sessions)) {
-  for (const message of sessionMessages) {
-    messageIndex.add(getMessageSignature(message));
-  }
-}
+const messageIndex = new Set(
+  stores.messages.messages.map((message) => getMessageSignature(message)),
+);
 
 const sessionManager = createSessionManager({
   app,
@@ -202,6 +199,14 @@ app.put("/api/settings", async (request, reply) => {
   try {
     stores.settings = mergeSettingsStore(stores.settings, request.body);
     await persistSettings();
+
+    for (const session of Object.values(stores.sessions.sessions)) {
+      session.webhook = mergeSettingsStore(
+        { webhook: session.webhook || cloneWebhookSettings(stores.settings.webhook) },
+        request.body
+      ).webhook;
+    }
+    await persistSessions();
 
     return {
       ok: true,
@@ -729,23 +734,49 @@ function createSessionManager({
     }
   };
 
-  const trimMessagesStore = (sessionId) => {
-    if (!stores.messages.sessions[sessionId]) {
-      stores.messages.sessions[sessionId] = [];
-    }
-    const sessionMessages = stores.messages.sessions[sessionId];
-    if (sessionMessages.length <= config.maxStoredMessages) {
+  const trimMessagesStore = () => {
+    if (config.maxStoredMessages === Number.POSITIVE_INFINITY) {
       return;
     }
 
-    const removed = sessionMessages.splice(
-      0,
-      sessionMessages.length - config.maxStoredMessages,
-    );
+    const sessionsMap = {};
+    for (const msg of stores.messages.messages) {
+      if (!sessionsMap[msg.sessionId]) sessionsMap[msg.sessionId] = [];
+      sessionsMap[msg.sessionId].push(msg);
+    }
 
-    removed.forEach((message) => {
+    let needsTrim = false;
+    for (const sessionId of Object.keys(sessionsMap)) {
+      if (sessionsMap[sessionId].length > config.maxStoredMessages) {
+        needsTrim = true;
+        break;
+      }
+    }
+
+    if (!needsTrim) {
+      return;
+    }
+
+    const keptMessages = [];
+    const removedMessages = [];
+
+    for (const sessionId of Object.keys(sessionsMap)) {
+      const msgs = sessionsMap[sessionId];
+      if (msgs.length > config.maxStoredMessages) {
+        removedMessages.push(...msgs.slice(0, msgs.length - config.maxStoredMessages));
+        keptMessages.push(...msgs.slice(msgs.length - config.maxStoredMessages));
+      } else {
+        keptMessages.push(...msgs);
+      }
+    }
+
+    keptMessages.sort((a, b) => getMessageTimestampMs(a) - getMessageTimestampMs(b));
+
+    removedMessages.forEach((message) => {
       messageIndex.delete(getMessageSignature(message));
     });
+
+    stores.messages.messages = keptMessages;
   };
 
   const recordMessage = (sessionId, record, options = {}) => {
@@ -760,13 +791,9 @@ function createSessionManager({
       return normalizedRecord;
     }
 
-    if (!stores.messages.sessions[sessionId]) {
-      stores.messages.sessions[sessionId] = [];
-    }
-
     messageIndex.add(signature);
-    stores.messages.sessions[sessionId].push(normalizedRecord);
-    trimMessagesStore(sessionId);
+    stores.messages.messages.push(normalizedRecord);
+    trimMessagesStore();
     upsertConversationFromMessage(stores, sessionId, normalizedRecord, {
       incrementUnread: options.incrementUnread ?? !normalizedRecord.fromMe,
       incrementCount: true,
@@ -1446,12 +1473,17 @@ function createSessionManager({
       await fs.rm(path.join(config.sessionsDir, sessionId), { recursive: true, force: true });
     }
 
-    if (stores.messages.sessions[sessionId]) {
-      for (const message of stores.messages.sessions[sessionId]) {
+    const keptMessages = [];
+    for (const message of stores.messages.messages) {
+      if (message.sessionId === sessionId) {
         messageIndex.delete(getMessageSignature(message));
+        continue;
       }
-      delete stores.messages.sessions[sessionId];
+
+      keptMessages.push(message);
     }
+
+    stores.messages.messages = keptMessages;
     delete stores.conversations.sessions[sessionId];
     delete stores.sessions.sessions[sessionId];
     delete stores.contacts.sessions[sessionId];
@@ -1531,9 +1563,8 @@ function listSessionConversations(sessionId, stores, { limit, search }) {
 }
 
 function getConversationMessages(sessionId, jid, stores) {
-  const sessionMessages = stores.messages.sessions[sessionId] || [];
-  return sessionMessages
-    .filter((message) => message.jid === jid)
+  return stores.messages.messages
+    .filter((message) => message.sessionId === sessionId && message.jid === jid)
     .sort((left, right) => getMessageTimestampMs(left) - getMessageTimestampMs(right));
 }
 
@@ -1563,7 +1594,7 @@ function getSessionStats(sessionId, stores) {
     limit: Number.MAX_SAFE_INTEGER,
     search: "",
   });
-  const messages = stores.messages.sessions[sessionId] || [];
+  const messages = stores.messages.messages.filter((message) => message.sessionId === sessionId);
 
   return {
     conversationCount: conversations.length,
@@ -1651,10 +1682,9 @@ function serializeMediaForClient(sessionId, message) {
 }
 
 function findStoredMessage(sessionId, messageId, stores) {
-  const sessionMessages = stores.messages.sessions[sessionId] || [];
   return (
-    sessionMessages.find(
-      (message) => String(message.id) === String(messageId)
+    stores.messages.messages.find(
+      (message) => message.sessionId === sessionId && String(message.id) === String(messageId),
     ) || null
   );
 }
@@ -1702,9 +1732,9 @@ function rebuildConversationsFromMessages(stores) {
     }
   }
 
-  const sortedMessages = Object.values(stores.messages.sessions || {})
-    .flat()
-    .sort((left, right) => getMessageTimestampMs(left) - getMessageTimestampMs(right));
+  const sortedMessages = [...stores.messages.messages].sort(
+    (left, right) => getMessageTimestampMs(left) - getMessageTimestampMs(right),
+  );
 
   for (const message of sortedMessages) {
     const sessionId = message.sessionId || DEFAULT_SESSION_ID;
@@ -2486,49 +2516,26 @@ function getAccountId(value) {
   return String(value.id);
 }
 
-function normalizeMessagesStore(input) {
-  const store = { sessions: {} };
-
-  if (input?.sessions && typeof input.sessions === "object") {
-    for (const [sessionId, sessionData] of Object.entries(input.sessions)) {
-      store.sessions[sessionId] = (sessionData || []).map((message) => ({
-        id: message.id || `legacy_${Date.now()}`,
-        sessionId: message.sessionId || sessionId,
-        jid: message.jid || "",
-        fromMe: Boolean(message.fromMe),
-        text: typeof message.text === "string" ? message.text : "",
-        timestamp: normalizeTimestamp(message.timestamp),
-        type: message.type || "text",
-        status: message.status || "stored",
-        pushName: message.pushName || null,
-        participant: message.participant || null,
-        media: normalizeStoredMediaDescriptor(message.media),
-      }));
-    }
-  } else if (input?.messages && Array.isArray(input.messages)) {
-    // Migration from old flat array
-    for (const message of input.messages) {
-      const sessionId = message.sessionId || "principal";
-      if (!store.sessions[sessionId]) {
-        store.sessions[sessionId] = [];
-      }
-      store.sessions[sessionId].push({
-        id: message.id || `legacy_${Date.now()}`,
-        sessionId: message.sessionId || sessionId,
-        jid: message.jid || "",
-        fromMe: Boolean(message.fromMe),
-        text: typeof message.text === "string" ? message.text : "",
-        timestamp: normalizeTimestamp(message.timestamp),
-        type: message.type || "text",
-        status: message.status || "stored",
-        pushName: message.pushName || null,
-        participant: message.participant || null,
-        media: normalizeStoredMediaDescriptor(message.media),
-      });
-    }
+function normalizeMessagesStore(input, fallbackSessionId) {
+  if (!input || typeof input !== "object" || !Array.isArray(input.messages)) {
+    return { messages: [] };
   }
 
-  return store;
+  return {
+    messages: input.messages.map((message) => ({
+      id: message.id || `legacy_${Date.now()}`,
+      sessionId: message.sessionId || fallbackSessionId,
+      jid: message.jid || "",
+      fromMe: Boolean(message.fromMe),
+      text: typeof message.text === "string" ? message.text : "",
+      timestamp: normalizeTimestamp(message.timestamp),
+      type: message.type || "text",
+      status: message.status || "stored",
+      pushName: message.pushName || null,
+      participant: message.participant || null,
+      media: normalizeStoredMediaDescriptor(message.media),
+    })),
+  };
 }
 
 function normalizeConversationsStore(input, fallbackSessionId) {
@@ -2813,7 +2820,13 @@ function ensureSessionMeta(store, sessionId, patch = {}) {
 }
 
 function listSessionIdsFromMessages(messagesStore) {
-  return Object.keys(messagesStore.sessions || {});
+  return Array.from(
+    new Set(
+      messagesStore.messages
+        .map((message) => message.sessionId || DEFAULT_SESSION_ID)
+        .filter(Boolean),
+    ),
+  );
 }
 
 function listSessionIdsFromConversationStore(conversationsStore) {

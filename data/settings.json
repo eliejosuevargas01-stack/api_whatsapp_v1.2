@@ -1,0 +1,12 @@
+{
+  "webhook": {
+    "enabled": false,
+    "url": "",
+    "secret": "",
+    "allowPrivate": true,
+    "allowGroups": true,
+    "allowNewsletters": false,
+    "allowBroadcasts": false,
+    "includeFromMe": false
+  }
+}
