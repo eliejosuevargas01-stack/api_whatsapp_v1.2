@@ -8,54 +8,44 @@
   </head>
   <body class="sessions-page">
     <div class="shell">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">Painel local</p>
-          <h1>Sessoes</h1>
-        </div>
-
-        <div class="topbar-actions">
-          <a class="action-link" href="/">Abrir conversas</a>
-        </div>
-      </header>
-
-      <main class="sessions-layout">
-        <aside class="panel session-list-panel">
-          <div class="panel-head">
-            <div>
-              <h2>Dispositivos</h2>
-              <p class="muted">QR Code e conexao ficam isolados aqui.</p>
-            </div>
-            <button id="refreshSessionsButton" class="action-button secondary" type="button">
-              Atualizar
+      <aside class="sidebar session-list-panel">
+        <div class="panel-head">
+          <div>
+            <h2>Dispositivos</h2>
+          </div>
+          <div class="topbar-actions">
+            <a class="action-link" href="/" title="Conversas">💬</a>
+            <button id="refreshSessionsButton" class="action-button secondary" type="button" title="Atualizar">
+              ↻
             </button>
           </div>
+        </div>
 
-          <form id="sessionForm" class="inline-form">
-            <input
-              id="sessionNameInput"
-              type="text"
-              name="name"
-              placeholder="Ex: iphone-atendimento"
-              autocomplete="off"
-            />
-            <button class="action-button" type="submit">Nova sessao</button>
-          </form>
+        <form id="sessionForm" class="inline-form">
+          <input
+            id="sessionNameInput"
+            type="text"
+            name="name"
+            placeholder="Nova sessão..."
+            autocomplete="off"
+          />
+          <button class="action-button" type="submit">+</button>
+        </form>
 
-          <div id="sessionList" class="session-list">
-            <p class="empty">Carregando sessoes...</p>
-          </div>
-        </aside>
+        <div id="sessionList" class="session-list">
+          <p class="empty">Carregando sessoes...</p>
+        </div>
+      </aside>
 
-        <div class="sessions-workspace">
-          <section class="panel session-detail-panel">
-            <div class="panel-head">
-              <div>
-                <h2 id="sessionTitle">Nenhuma sessao selecionada</h2>
-                <p id="sessionSubtitle" class="muted">Escolha uma sessao para ver QR e status.</p>
-              </div>
-              <span id="sessionStatus" class="status-pill status-idle">inativa</span>
+      <div class="sessions-workspace">
+        <section class="session-detail-panel">
+          <div class="chat-header">
+            <div>
+              <h2 id="sessionTitle">Nenhuma sessao selecionada</h2>
+              <p id="sessionSubtitle" class="muted">Escolha uma sessao para ver QR e status.</p>
             </div>
+            <span id="sessionStatus" class="status-pill status-idle">inativa</span>
+          </div>
 
             <p id="sessionNote" class="notice"></p>
 
@@ -91,15 +81,15 @@
                 </div>
               </div>
             </div>
-          </section>
+        </section>
 
-          <section class="panel settings-panel">
-            <div class="panel-head">
-              <div>
-                <h2>Configuracoes da sessao</h2>
-                <p class="muted">Webhook e filtros exclusivos da sessao selecionada.</p>
-              </div>
+        <section class="settings-panel">
+          <div class="chat-header">
+            <div>
+              <h2>Configurações da sessão</h2>
+              <p class="muted">Webhook e filtros exclusivos da sessao selecionada.</p>
             </div>
+          </div>
 
             <form id="settingsForm" class="settings-form">
               <label class="setting-toggle">
@@ -185,9 +175,8 @@
                 </p>
               </div>
             </form>
-          </section>
-        </div>
-      </main>
+        </section>
+      </div>
     </div>
 
     <script type="module" src="/sessions.js?v=20260429-1"></script>
