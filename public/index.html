@@ -8,54 +8,45 @@
   </head>
   <body class="chat-page">
     <div class="shell">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">Painel local</p>
-          <h1>Conversas</h1>
-        </div>
-
-        <div class="topbar-actions">
-          <label class="session-picker">
-            <span>Sessao</span>
-            <select id="sessionSelect"></select>
-          </label>
-          <span id="sessionStatus" class="status-pill status-idle">inativa</span>
-          <a class="action-link" href="/sessoes">Gerenciar sessoes</a>
-        </div>
-      </header>
-
-      <main class="chat-layout">
-        <aside class="sidebar panel">
-          <div class="panel-head">
-            <div>
-              <h2>Lista</h2>
-              <p class="muted">O foco da tela principal fica nas conversas.</p>
-            </div>
-            <button id="refreshConversationsButton" class="action-button secondary" type="button">
-              Atualizar
+      <aside class="sidebar">
+        <div class="panel-head">
+          <div>
+            <h2>Conversas</h2>
+          </div>
+          <div class="topbar-actions">
+            <label class="session-picker">
+              <select id="sessionSelect"></select>
+            </label>
+            <span id="sessionStatus" class="status-pill status-idle" style="display:none;">inativa</span>
+            <a class="action-link" href="/sessoes" title="Gerenciar sessoes">⚙️</a>
+            <button id="refreshConversationsButton" class="action-button secondary" type="button" title="Atualizar">
+              ↻
             </button>
           </div>
+        </div>
 
+        <div class="search-container">
           <input
             id="conversationSearchInput"
             type="search"
-            placeholder="Buscar por nome, numero ou trecho"
+            placeholder="Buscar ou começar uma nova conversa"
             autocomplete="off"
           />
+        </div>
 
-          <div id="conversationList" class="conversation-list">
-            <p class="empty">Selecione uma sessao para carregar as conversas.</p>
-          </div>
-        </aside>
+        <div id="conversationList" class="conversation-list">
+          <p class="empty">Selecione uma sessao para carregar as conversas.</p>
+        </div>
+      </aside>
 
-        <section class="chat-panel panel">
-          <div class="chat-header">
-            <div>
-              <h2 id="conversationTitle">Selecione uma conversa</h2>
-              <p id="conversationMeta" class="muted">Escolha uma conversa na lateral para abrir o historico.</p>
-            </div>
-            <p id="chatNotice" class="notice"></p>
+      <section class="chat-panel">
+        <div class="chat-header">
+          <div>
+            <h2 id="conversationTitle">Selecione uma conversa</h2>
+            <p id="conversationMeta" class="muted">Escolha uma conversa na lateral para abrir o historico.</p>
           </div>
+          <p id="chatNotice" class="notice"></p>
+        </div>
 
           <div id="messageList" class="message-list">
             <p class="empty">Nenhuma conversa carregada.</p>
@@ -92,7 +83,6 @@
             </div>
           </form>
         </section>
-      </main>
     </div>
 
     <script type="module" src="/app.js?v=20260317-8"></script>
