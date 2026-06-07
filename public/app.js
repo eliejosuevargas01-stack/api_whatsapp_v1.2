@@ -8,6 +8,8 @@ import {
   getSessionById,
   loadPanelState,
   savePanelState,
+  initTheme,
+  toggleTheme
 } from "./shared.js?v=20260317-7";
 
 const state = {
@@ -283,27 +285,46 @@ function renderConversations(conversations) {
       await fetchMessages(conversation.jid, { stickToBottom: true });
     });
 
-    const top = document.createElement("div");
-    top.className = "conversation-top";
 
-    const title = document.createElement("strong");
-    title.textContent = conversation.title;
+    const unreadBadge = conversation.unreadCount > 0
+      ? Object.assign(document.createElement("span"), { className: "conversation-badge", textContent: conversation.unreadCount })
+      : null;
+    const titleText = conversation.title || conversation.displayJid || conversation.jid;
+    const time = formatDateTime(conversation.lastMessageTimestamp);
 
-    const badge = document.createElement("span");
-    badge.className = "conversation-badge";
-    badge.hidden = !conversation.unreadCount;
-    badge.textContent = conversation.unreadCount ? String(conversation.unreadCount) : "";
+    const avatar = document.createElement("div");
+    avatar.className = "avatar";
+    avatar.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
 
-    const jid = document.createElement("p");
-    jid.className = "card-meta";
-    jid.textContent = conversation.displayJid || conversation.jid;
+    const cardContent = document.createElement("div");
+    cardContent.className = "card-content";
 
-    const preview = document.createElement("p");
-    preview.className = "preview";
-    preview.textContent = conversation.preview || "Sem mensagens.";
+    const topRow = document.createElement("div");
+    topRow.className = "conversation-top";
 
-    top.append(title, badge);
-    button.append(top, jid, preview);
+    const strong = document.createElement("strong");
+    strong.textContent = titleText;
+
+    const meta = document.createElement("span");
+    meta.className = "card-meta";
+    meta.textContent = time;
+
+    topRow.appendChild(strong);
+    topRow.appendChild(meta);
+
+    const previewPara = document.createElement("p");
+    previewPara.className = "preview";
+    previewPara.textContent = conversation.preview || " ";
+    if (unreadBadge) {
+      previewPara.appendChild(unreadBadge);
+    }
+
+    cardContent.appendChild(topRow);
+    cardContent.appendChild(previewPara);
+
+    button.appendChild(avatar);
+    button.appendChild(cardContent);
+
     conversationList.appendChild(button);
   });
 }
@@ -681,4 +702,10 @@ function persistSelection() {
     selectedSessionId: state.selectedSessionId,
     selectedConversationJid: state.selectedConversationJid,
   });
+}
+
+initTheme();
+const themeToggleBtn = document.getElementById("themeToggle");
+if (themeToggleBtn) {
+  themeToggleBtn.addEventListener("click", toggleTheme);
 }

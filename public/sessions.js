@@ -4,6 +4,8 @@ import {
   getSessionById,
   loadPanelState,
   savePanelState,
+  initTheme,
+  toggleTheme
 } from "./shared.js?v=20260317-7";
 
 const state = {
@@ -247,27 +249,34 @@ function renderSessions() {
       selectSession(session.id);
     });
 
-    const top = document.createElement("div");
-    top.className = "session-top";
 
-    const title = document.createElement("strong");
-    title.textContent = session.name;
+    const statusText = formatStatus(session.snapshot.status || "idle");
 
-    const badge = document.createElement("span");
-    badge.className = `status-pill status-${session.snapshot.status || "idle"}`;
-    badge.textContent = formatStatus(session.snapshot.status || "idle");
+    const avatar = document.createElement("div");
+    avatar.className = "avatar";
+    avatar.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
 
-    const account = document.createElement("p");
-    account.className = "card-meta";
-    account.textContent = session.snapshot.accountId || "Sem dispositivo conectado";
+    const cardContent = document.createElement("div");
+    cardContent.className = "card-content";
 
-    const stats = document.createElement("p");
-    stats.className = "card-meta";
-    stats.textContent =
-      `${session.stats.conversationCount} conversas • ${session.stats.messageCount} mensagens`;
+    const topRow = document.createElement("div");
+    topRow.className = "conversation-top";
 
-    top.append(title, badge);
-    button.append(top, account, stats);
+    const strong = document.createElement("strong");
+    strong.textContent = session.name || session.id;
+
+    topRow.appendChild(strong);
+
+    const previewPara = document.createElement("p");
+    previewPara.className = "preview";
+    previewPara.textContent = `Status: ${statusText}`;
+
+    cardContent.appendChild(topRow);
+    cardContent.appendChild(previewPara);
+
+    button.appendChild(avatar);
+    button.appendChild(cardContent);
+
     sessionList.appendChild(button);
   });
 }
@@ -487,4 +496,10 @@ function buildSettingsNote(settings) {
   }
 
   return `Webhook ativo para a sessao ${state.selectedSessionId}. Novas mensagens serao enviadas para a URL configurada.`;
+}
+
+initTheme();
+const themeToggleBtn = document.getElementById("themeToggle");
+if (themeToggleBtn) {
+  themeToggleBtn.addEventListener("click", toggleTheme);
 }

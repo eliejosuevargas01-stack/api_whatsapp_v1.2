@@ -2,6 +2,7 @@ import { createReadStream, existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { EventEmitter } from "node:events";
 
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
@@ -24,6 +25,7 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DEFAULT_SESSION_ID = "principal";
+const replyEmitter = new EventEmitter();
 
 const parseBoolean = (value, fallback = false) => {
   if (value === undefined || value === null || value === "") {
@@ -495,6 +497,8 @@ app.post("/api/sessions/:sessionId/messages/send", async (request, reply) => {
   const jid = String(request.body?.jid || "").trim();
   const text = String(request.body?.text || "").trim();
   const mediaInput = request.body?.media || null;
+  const waitForReply = parseBoolean(request.body?.waitForReply);
+  const replyTimeoutMs = Number(request.body?.replyTimeout) || 60000;
 
   if (!sessionManager.hasSession(sessionId)) {
     return reply.code(404).send({
@@ -527,6 +531,34 @@ app.post("/api/sessions/:sessionId/messages/send", async (request, reply) => {
       error: "bad_request",
       message: errorToMessage(error) || "Nao foi possivel enviar a mensagem.",
     });
+  }
+
+  if (waitForReply) {
+    try {
+      const replyMessage = await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          replyEmitter.off(`reply_${sessionId}_${message.jid}`, onReply);
+          resolve(null);
+        }, replyTimeoutMs);
+
+        const onReply = (incomingMessage) => {
+          clearTimeout(timeout);
+          replyEmitter.off(`reply_${sessionId}_${message.jid}`, onReply);
+          resolve(incomingMessage);
+        };
+
+        replyEmitter.on(`reply_${sessionId}_${message.jid}`, onReply);
+      });
+
+      return {
+        ok: true,
+        message: serializeMessageForClient(sessionId, message, stores),
+        reply: replyMessage ? serializeMessageForClient(sessionId, replyMessage, stores) : null,
+        replyTimeout: !replyMessage,
+      };
+    } catch (err) {
+      // Ignore emitter errors and just return the sent message
+    }
   }
 
   return {
@@ -1036,6 +1068,21 @@ function createSessionManager({
 
         if (isNewMessage) {
           void dispatchWebhookMessage(sessionId, storedMessage);
+          if (!storedMessage.fromMe) {
+            // Emite usando o JID original da mensagem
+            replyEmitter.emit(`reply_${sessionId}_${storedMessage.jid}`, storedMessage);
+
+            // Tenta emitir usando todos os aliases conhecidos para este contato (resolve LID -> Telefone)
+            const contact = getContactByAddress(stores.contacts, sessionId, storedMessage.jid);
+            if (contact) {
+              const aliases = [contact.jid, contact.lid, contact.id].filter(Boolean);
+              for (const alias of aliases) {
+                if (alias !== storedMessage.jid) {
+                  replyEmitter.emit(`reply_${sessionId}_${alias}`, storedMessage);
+                }
+              }
+            }
+          }
         }
       }
     };
@@ -1650,6 +1697,7 @@ function serializeMessageForClient(sessionId, message, stores) {
   return {
     id: message.id,
     jid: message.jid,
+    resolvedJid: identity.resolvedJid, // Retorna o telefone resolvido se for @lid
     displayJid: identity.displayJid,
     fromMe: Boolean(message.fromMe),
     text: message.text || "",

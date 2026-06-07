@@ -95,3 +95,16 @@ export function fileToDataUrl(file) {
 export function getSessionById(sessions, sessionId) {
   return sessions.find((session) => session.id === sessionId) || null;
 }
+
+export function initTheme() {
+  const savedState = loadPanelState();
+  const theme = savedState.theme || "dark";
+  document.documentElement.setAttribute("data-theme", theme);
+}
+
+export function toggleTheme() {
+  const currentTheme = document.documentElement.getAttribute("data-theme");
+  const newTheme = currentTheme === "light" ? "dark" : "light";
+  document.documentElement.setAttribute("data-theme", newTheme);
+  savePanelState({ theme: newTheme });
+}
