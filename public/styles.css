@@ -597,3 +597,191 @@ a {
     height: auto;
   }
 }
+
+/* App Rail Navigation */
+.app-rail {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  width: 60px;
+  background: var(--rail-bg, #f0f2f5);
+  border-right: 1px solid var(--line, #e9edef);
+  padding: 10px 0;
+  height: 100vh;
+}
+
+.rail-top, .rail-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.rail-icon {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 8px;
+  color: var(--icon, #54656f);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.rail-icon:hover {
+  background: rgba(11, 20, 26, 0.05);
+}
+
+.rail-icon.active {
+  background: rgba(11, 20, 26, 0.1);
+  color: var(--accent);
+}
+
+.rail-icon svg {
+  width: 24px;
+  height: 24px;
+  fill: currentColor;
+}
+
+.shell {
+  display: flex;
+  flex-direction: row;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+/* Dark Theme overrides */
+[data-theme="dark"] {
+  --bg: #111b21;
+  --panel-bg: #202c33;
+  --panel-header: #202c33;
+  --rail-bg: #202c33;
+  --line: #222d34;
+  --ink: #e9edef;
+  --text-primary: #e9edef;
+  --muted: #8696a0;
+  --icon: #aebac1;
+  --surface: #111b21;
+  --hover: #2a3942;
+  --input-bg: #2a3942;
+  --message-in: #202c33;
+  --message-out: #005c4b;
+}
+
+/* Sidebar structure fixes */
+.sidebar {
+  width: 380px;
+  min-width: 380px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-bg);
+  border-right: 1px solid var(--line);
+}
+
+.chat-panel {
+  flex: 1;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.sessions-workspace {
+  flex: 1;
+  height: 100vh;
+  display: flex;
+  flex-direction: row;
+}
+
+.avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #dfe5e7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.avatar svg {
+  width: 24px;
+  height: 24px;
+  fill: #fff;
+}
+
+.card-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  gap: 4px;
+}
+
+.conversation-card, .session-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border: none;
+  background: transparent;
+  width: 100%;
+  cursor: pointer;
+  border-bottom: 1px solid var(--line);
+}
+
+.conversation-card:hover, .session-card:hover {
+  background: var(--hover);
+}
+
+.conversation-card.active, .session-card.active {
+  background: var(--hover);
+}
+
+.conversation-top, .session-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.conversation-top strong, .session-top strong {
+  font-size: 16px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.preview {
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.conversation-badge {
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 10px;
+  min-width: 20px;
+  text-align: center;
+}
