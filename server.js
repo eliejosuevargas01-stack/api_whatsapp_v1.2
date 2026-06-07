@@ -1069,7 +1069,19 @@ function createSessionManager({
         if (isNewMessage) {
           void dispatchWebhookMessage(sessionId, storedMessage);
           if (!storedMessage.fromMe) {
+            // Emite usando o JID original da mensagem
             replyEmitter.emit(`reply_${sessionId}_${storedMessage.jid}`, storedMessage);
+
+            // Tenta emitir usando todos os aliases conhecidos para este contato (resolve LID -> Telefone)
+            const contact = getContactByAddress(stores.contacts, sessionId, storedMessage.jid);
+            if (contact) {
+              const aliases = [contact.jid, contact.lid, contact.id].filter(Boolean);
+              for (const alias of aliases) {
+                if (alias !== storedMessage.jid) {
+                  replyEmitter.emit(`reply_${sessionId}_${alias}`, storedMessage);
+                }
+              }
+            }
           }
         }
       }
@@ -1685,6 +1697,7 @@ function serializeMessageForClient(sessionId, message, stores) {
   return {
     id: message.id,
     jid: message.jid,
+    resolvedJid: identity.resolvedJid, // Retorna o telefone resolvido se for @lid
     displayJid: identity.displayJid,
     fromMe: Boolean(message.fromMe),
     text: message.text || "",
