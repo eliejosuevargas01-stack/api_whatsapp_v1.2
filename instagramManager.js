@@ -99,7 +99,15 @@ export async function loginInstagram(username, password) {
 
   try {
     const auth = await ig.account.login(identity, password);
-    process.nextTick(async () => await ig.simulate.postLoginFlow());
+    
+    // Executar postLoginFlow em background sem bloquear a resposta
+    process.nextTick(async () => {
+      try {
+        await ig.simulate.postLoginFlow();
+      } catch (err) {
+        console.warn(`postLoginFlow falhou para [${sessionId}], mas continuando:`, err?.message);
+      }
+    });
 
     instagramClients.set(sessionId, ig);
 
