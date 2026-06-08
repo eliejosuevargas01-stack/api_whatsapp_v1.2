@@ -1,10 +1,76 @@
-import { IgApiClient } from 'instagram-private-api';
+import { IgApiClient, IgCheckpointError, IgChallengeWrongCodeError } from 'instagram-private-api';
 import EventEmitter from 'node:events';
 
 export const igEmitter = new EventEmitter();
 
 const instagramClients = new Map();
 const instagramIntervals = new Map();
+const instagramChallenges = new Map();
+
+function buildInstagramChallengePayload(ig) {
+  const challenge = ig.state.challenge || {};
+  return {
+    stepName: challenge.step_name,
+    status: challenge.status,
+    message: challenge.message || 'Instagram solicitou verificacao de seguranca.',
+    stepData: challenge.step_data || {},
+    challengeUrl: challenge.url,
+    apiPath: challenge.api_path,
+  };
+}
+
+export function getInstagramChallenge(sessionId) {
+  const ig = instagramClients.get(sessionId);
+  if (!ig) {
+    throw new Error('Sessao do Instagram nao encontrada ou expirada.');
+  }
+
+  if (!ig.state.challenge) {
+    throw new Error('Nenhum desafio pendente para esta sessao.');
+  }
+
+  return buildInstagramChallengePayload(ig);
+}
+
+export async function resolveInstagramChallenge(sessionId, { choice, code } = {}) {
+  const ig = instagramClients.get(sessionId);
+  if (!ig) {
+    throw new Error('Sessao do Instagram nao encontrada ou expirada.');
+  }
+
+  if (!ig.state.challenge) {
+    throw new Error('Nenhum desafio pendente para esta sessao.');
+  }
+
+  let response;
+  if (choice !== undefined && choice !== null && choice !== '') {
+    response = await ig.challenge.selectVerifyMethod(choice);
+  } else if (code !== undefined && code !== null && code !== '') {
+    try {
+      response = await ig.challenge.sendSecurityCode(code);
+    } catch (error) {
+      if (error instanceof IgChallengeWrongCodeError) {
+        throw new Error('Codigo incorreto. Tente novamente.');
+      }
+      throw error;
+    }
+  } else {
+    response = await ig.challenge.auto();
+  }
+
+  if (response?.action === 'close' || ig.state.challenge === null) {
+    const auth = await ig.account.currentUser();
+    instagramChallenges.delete(sessionId);
+    if (!instagramIntervals.has(sessionId)) {
+      startPolling(sessionId, ig);
+    }
+    return { sessionId, user: auth };
+  }
+
+  const challenge = buildInstagramChallengePayload(ig);
+  instagramChallenges.set(sessionId, challenge);
+  return { challenge };
+}
 
 /**
  * Inicia uma sessao no Instagram.
@@ -37,6 +103,13 @@ export async function loginInstagram(username, password) {
 
     return { sessionId, user: auth };
   } catch (error) {
+    if (error instanceof IgCheckpointError) {
+      await ig.challenge.state();
+      instagramClients.set(sessionId, ig);
+      const challenge = buildInstagramChallengePayload(ig);
+      instagramChallenges.set(sessionId, challenge);
+      return { challenge, sessionId };
+    }
     throw new Error(`Falha no login do Instagram: ${error.message}`);
   }
 }

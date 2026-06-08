@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { EventEmitter } from "node:events";
-import { loginInstagram, sendInstagramMessage, igEmitter, logoutInstagram } from "./instagramManager.js";
+import { loginInstagram, sendInstagramMessage, resolveInstagramChallenge, getInstagramChallenge, igEmitter, logoutInstagram } from "./instagramManager.js";
 import https from "node:https";
 
 import rateLimit from "@fastify/rate-limit";
@@ -528,10 +528,42 @@ app.post("/api/instagram/login", async (request, reply) => {
   }
 
   try {
-    const session = await loginInstagram(username, password);
-    return { ok: true, session };
+    const result = await loginInstagram(username, password);
+    return { ok: true, ...result };
   } catch (error) {
     return reply.code(400).send({ error: "login_failed", message: error.message });
+  }
+});
+
+app.get("/api/instagram/challenge/:sessionId", async (request, reply) => {
+  const { sessionId } = request.params;
+
+  if (!sessionId) {
+    return reply.code(400).send({ error: "bad_request", message: "Informe sessionId." });
+  }
+
+  try {
+    const challenge = getInstagramChallenge(sessionId);
+    return { ok: true, challenge };
+  } catch (error) {
+    return reply.code(400).send({ error: "challenge_not_found", message: error.message });
+  }
+});
+
+app.post("/api/instagram/challenge", async (request, reply) => {
+  const sessionId = request.body?.sessionId;
+  const choice = request.body?.choice;
+  const code = request.body?.code;
+
+  if (!sessionId) {
+    return reply.code(400).send({ error: "bad_request", message: "Informe sessionId." });
+  }
+
+  try {
+    const result = await resolveInstagramChallenge(sessionId, { choice, code });
+    return { ok: true, ...result };
+  } catch (error) {
+    return reply.code(400).send({ error: "challenge_failed", message: error.message });
   }
 });
 
