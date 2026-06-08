@@ -106,13 +106,14 @@ export async function loginInstagram(username, password) {
       try {
         await ig.simulate.postLoginFlow();
       } catch (err) {
-        if (err instanceof IgCheckpointError) {
+        const errMsg = String(err?.message || '');
+        if (err instanceof IgCheckpointError || errMsg.includes('checkpoint_required')) {
           console.warn(`Checkpoint requerido durante postLoginFlow [${sessionId}]:`, err?.message);
           try {
             await ig.challenge.state();
             const challenge = buildInstagramChallengePayload(ig);
             instagramChallenges.set(sessionId, challenge);
-            console.log(`Challenge armazenado para [${sessionId}]`);
+            console.log(`Challenge armazenado para [${sessionId}]:`, challenge);
           } catch (challengeErr) {
             console.error(`Erro ao obter challenge details [${sessionId}]:`, challengeErr?.message);
           }
