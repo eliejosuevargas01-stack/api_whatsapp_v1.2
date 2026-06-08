@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { EventEmitter } from "node:events";
+import { loginInstagram, sendInstagramMessage, igEmitter, logoutInstagram } from "./instagramManager.js";
 import https from "node:https";
 
 import rateLimit from "@fastify/rate-limit";
@@ -509,6 +510,46 @@ app.post("/api/sessions/:sessionId/conversations/:jid/read", async (request, rep
     ok: true,
     conversation: buildConversationSummary(sessionId, conversation, stores),
   };
+});
+
+// Listener para mensagens do Instagram
+igEmitter.on('message', (msg) => {
+  app.log.info({ msg }, 'Nova mensagem recebida do Instagram');
+  // Se houvesse lógica de Webhook, poderia ser chamada aqui, por exemplo:
+  // dispatchWebhookMessage(msg.sessionId, { ...formatada_para_o_webhook... });
+});
+
+app.post("/api/instagram/login", async (request, reply) => {
+  const username = request.body?.username;
+  const password = request.body?.password;
+
+  if (!username || !password) {
+    return reply.code(400).send({ error: "bad_request", message: "Informe username e password." });
+  }
+
+  try {
+    const session = await loginInstagram(username, password);
+    return { ok: true, session };
+  } catch (error) {
+    return reply.code(400).send({ error: "login_failed", message: error.message });
+  }
+});
+
+app.post("/api/instagram/send", async (request, reply) => {
+  const sessionId = request.body?.sessionId; // que no caso é o username do bot logado
+  const usernameTo = request.body?.usernameTo;
+  const text = request.body?.text;
+
+  if (!sessionId || !usernameTo || !text) {
+    return reply.code(400).send({ error: "bad_request", message: "Informe sessionId, usernameTo e text." });
+  }
+
+  try {
+    const result = await sendInstagramMessage(sessionId, usernameTo, text);
+    return { ok: true, result };
+  } catch (error) {
+    return reply.code(400).send({ error: "send_failed", message: error.message });
+  }
 });
 
 app.post("/api/sessions/:sessionId/messages/send", async (request, reply) => {

@@ -19,6 +19,9 @@ const state = {
 
 const sessionForm = document.getElementById("sessionForm");
 const sessionNameInput = document.getElementById("sessionNameInput");
+const sessionPasswordInput = document.getElementById("sessionPasswordInput");
+const sessionPlatformSelect = document.getElementById("sessionPlatformSelect");
+const igLoginFrame = document.getElementById("igLoginFrame");
 const refreshSessionsButton = document.getElementById("refreshSessionsButton");
 const sessionList = document.getElementById("sessionList");
 const sessionTitle = document.getElementById("sessionTitle");
@@ -55,12 +58,58 @@ function loadInitialState() {
 }
 
 function bindEvents() {
+  if (sessionPlatformSelect) {
+    sessionPlatformSelect.addEventListener("change", () => {
+      if (sessionPlatformSelect.value === "instagram") {
+        sessionPasswordInput.style.display = "inline-block";
+        sessionNameInput.placeholder = "Usuário do Instagram...";
+      } else {
+        sessionPasswordInput.style.display = "none";
+        sessionNameInput.placeholder = "Nova sessão...";
+        sessionPasswordInput.value = "";
+      }
+    });
+  }
   sessionForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
     const name = sessionNameInput.value.trim();
+    const platform = sessionPlatformSelect ? sessionPlatformSelect.value : 'whatsapp';
+    const password = sessionPasswordInput ? sessionPasswordInput.value.trim() : '';
+
     if (!name) {
       sessionNameInput.focus();
+      return;
+    }
+
+    if (platform === 'instagram') {
+      if (!password) {
+        sessionNote.textContent = 'Informe a senha para logar no Instagram.';
+        return;
+      }
+
+      sessionForm.querySelector("button").disabled = true;
+      sessionNote.textContent = "Logando no Instagram...";
+
+      try {
+        const response = await apiRequest("/api/instagram/login", {
+          method: "POST",
+          body: JSON.stringify({ username: name, password }),
+        });
+
+        if (!response.ok) {
+          throw new Error(response.error || "Erro ao criar sessao no instagram.");
+        }
+
+        sessionNameInput.value = "";
+        sessionPasswordInput.value = "";
+        sessionNote.textContent = "Sessão criada e logada com sucesso.";
+        await refreshSessions(true);
+      } catch (error) {
+        sessionNote.textContent = error.message;
+      } finally {
+        sessionForm.querySelector("button").disabled = false;
+      }
       return;
     }
 
@@ -295,6 +344,8 @@ function renderSelectedSession() {
     sessionUnreadCount.textContent = "0";
     sessionNote.textContent = "O QR aparece aqui somente quando voce clicar em conectar.";
     qrFrame.innerHTML = '<p class="empty">O QR aparece aqui somente quando voce clicar em conectar.</p>';
+    if(igLoginFrame) igLoginFrame.style.display = 'none';
+    qrFrame.style.display = 'flex';
     setButtonsDisabled(true);
     return;
   }
@@ -304,6 +355,17 @@ function renderSelectedSession() {
   sessionSubtitle.textContent = `ID da sessao: ${session.id}`;
   sessionStatus.className = `status-pill status-${session.snapshot.status || "idle"}`;
   sessionStatus.textContent = formatStatus(session.snapshot.status || "idle");
+
+  if (session.platform === 'instagram' || session.id === session.name) {
+     if(igLoginFrame) {
+         igLoginFrame.style.display = 'flex';
+         igLoginFrame.innerHTML = '<p class="empty">Sessão do Instagram logada com sucesso.</p>';
+         qrFrame.style.display = 'none';
+     }
+  } else {
+     if(igLoginFrame) igLoginFrame.style.display = 'none';
+     qrFrame.style.display = 'flex';
+  }
   sessionAccount.textContent = session.snapshot.accountId || "-";
   sessionConversationCount.textContent = String(session.stats.conversationCount || 0);
   sessionMessageCount.textContent = String(session.stats.messageCount || 0);
