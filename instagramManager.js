@@ -99,6 +99,7 @@ export async function loginInstagram(username, password) {
 
   try {
     const auth = await ig.account.login(identity, password);
+    console.log(`[${sessionId}] Login successful. Checkpoint state:`, ig.state.checkpoint ? 'PENDENTE' : 'NENHUM');
     
     // Executar postLoginFlow em background sem bloquear a resposta
     process.nextTick(async () => {
@@ -113,6 +114,7 @@ export async function loginInstagram(username, password) {
 
     // Verificar se há checkpoint pendente
     if (ig.state.checkpoint) {
+      console.log(`[${sessionId}] Checkpoint detectado, buscando desafio...`);
       await ig.challenge.state();
       const challenge = buildInstagramChallengePayload(ig);
       instagramChallenges.set(sessionId, challenge);
