@@ -106,7 +106,19 @@ export async function loginInstagram(username, password) {
       try {
         await ig.simulate.postLoginFlow();
       } catch (err) {
-        console.warn(`postLoginFlow falhou para [${sessionId}], mas continuando:`, err?.message);
+        if (err instanceof IgCheckpointError) {
+          console.warn(`Checkpoint requerido durante postLoginFlow [${sessionId}]:`, err?.message);
+          try {
+            await ig.challenge.state();
+            const challenge = buildInstagramChallengePayload(ig);
+            instagramChallenges.set(sessionId, challenge);
+            console.log(`Challenge armazenado para [${sessionId}]`);
+          } catch (challengeErr) {
+            console.error(`Erro ao obter challenge details [${sessionId}]:`, challengeErr?.message);
+          }
+        } else {
+          console.warn(`postLoginFlow falhou para [${sessionId}], mas continuando:`, err?.message);
+        }
       }
     });
 
