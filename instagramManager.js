@@ -107,6 +107,14 @@ export async function loginInstagram(username, password) {
         await ig.simulate.postLoginFlow();
       } catch (err) {
         const errMsg = String(err?.message || '');
+        console.log(`postLoginFlow error details [${sessionId}]:`, {
+          type: err?.constructor?.name,
+          message: err?.message,
+          hasChallenge: !!ig.state.challenge,
+          hasCheckpoint: !!ig.state.checkpoint,
+          igChallenge: ig.state.challenge ? Object.keys(ig.state.challenge) : 'null'
+        });
+        
         if (err instanceof IgCheckpointError || errMsg.includes('checkpoint_required')) {
           console.warn(`Checkpoint requerido durante postLoginFlow [${sessionId}]:`, err?.message);
           try {
