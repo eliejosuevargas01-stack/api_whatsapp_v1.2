@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { EventEmitter } from "node:events";
+import https from "node:https";
 
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
@@ -387,7 +388,25 @@ app.get("/api/sessions/:sessionId/conversations", async (request, reply) => {
   const search = String(request.query?.search || "").trim().toLowerCase();
 
   return {
-    conversations: listSessionConversations(sessionId, stores, { limit, search }),
+    conversations: listSessionConversations(sessionId, stores, { limit, search }).filter(c => c.kind !== "newsletter" && c.kind !== "broadcast"),
+  };
+});
+
+app.get("/api/sessions/:sessionId/status", async (request, reply) => {
+  const { sessionId } = request.params;
+
+  if (!sessionManager.hasSession(sessionId)) {
+    return reply.code(404).send({
+      error: "not_found",
+      message: "Sessao nao encontrada.",
+    });
+  }
+
+  const limit = Math.min(parseInteger(request.query?.limit, 100), 500);
+  const search = String(request.query?.search || "").trim().toLowerCase();
+
+  return {
+    conversations: listSessionConversations(sessionId, stores, { limit, search }).filter(c => c.kind === "newsletter" || c.kind === "broadcast"),
   };
 });
 
@@ -494,7 +513,8 @@ app.post("/api/sessions/:sessionId/conversations/:jid/read", async (request, rep
 
 app.post("/api/sessions/:sessionId/messages/send", async (request, reply) => {
   const { sessionId } = request.params;
-  const jid = String(request.body?.jid || "").trim();
+  let jid = String(request.body?.jid || "").trim();
+  const link = String(request.body?.link || "").trim();
   const text = String(request.body?.text || "").trim();
   const mediaInput = request.body?.media || null;
   const waitForReply = parseBoolean(request.body?.waitForReply);
@@ -507,7 +527,7 @@ app.post("/api/sessions/:sessionId/messages/send", async (request, reply) => {
     });
   }
 
-  if (!jid || (!text && !mediaInput)) {
+  if ((!jid && !link) || (!text && !mediaInput)) {
     return reply.code(400).send({
       error: "bad_request",
       message: "Informe jid e uma mensagem ou arquivo.",
@@ -517,6 +537,25 @@ app.post("/api/sessions/:sessionId/messages/send", async (request, reply) => {
   let message;
 
   try {
+    if (link && !jid) {
+      const waMeMatch = link.match(/https?:\/\/(?:wa\.me|api\.whatsapp\.com)\/message\/([a-zA-Z0-9]+)/i);
+      if (waMeMatch) {
+        const resolvedJid = await resolveWaMeLink(link);
+        if (resolvedJid) {
+          jid = resolvedJid;
+        } else {
+          return reply.code(400).send({ error: "bad_request", message: "Nao foi possivel extrair o numero do link fornecido." });
+        }
+      }
+    }
+
+    if (!jid) {
+      return reply.code(400).send({
+        error: "bad_request",
+        message: "Nao foi possivel determinar o destinatario.",
+      });
+    }
+
     if (mediaInput) {
       const media = normalizeOutboundMediaInput(mediaInput);
       message = await sessionManager.sendMedia(sessionId, jid, {
@@ -880,7 +919,7 @@ function createSessionManager({
       }
 
       for (const chatMessage of extractHistoryChatMessages(chat)) {
-        const normalizedMessage = normalizeIncomingMessage(chatMessage);
+        const normalizedMessage = await normalizeIncomingMessage(state.socket, chatMessage);
         if (!normalizedMessage) {
           continue;
         }
@@ -899,7 +938,7 @@ function createSessionManager({
     }
 
     for (const historyMessage of event.messages || []) {
-      const normalizedMessage = normalizeIncomingMessage(historyMessage);
+      const normalizedMessage = await normalizeIncomingMessage(state.socket, historyMessage);
       if (!normalizedMessage) {
         continue;
       }
@@ -1054,7 +1093,7 @@ function createSessionManager({
       }
 
       for (const message of event.messages || []) {
-        const normalizedMessage = normalizeIncomingMessage(message);
+        const normalizedMessage = await normalizeIncomingMessage(state.socket, message);
         if (!normalizedMessage) {
           continue;
         }
@@ -1876,12 +1915,33 @@ function extractMediaDescriptor(content) {
   return null;
 }
 
-function normalizeIncomingMessage(message) {
-  const jid = message?.key?.remoteJid;
+async function normalizeIncomingMessage(sock, message) {
+  let jid = message?.key?.remoteJid;
+  let pushName = message?.pushName || 'Desconhecido';
 
   if (!jid || !message?.message) {
     return null;
   }
+
+  if (jid.endsWith('@g.us') && message.key.participant) {
+    jid = message.key.participant;
+  }
+
+  if (jid.includes(':') || jid.endsWith('@lid')) {
+    try {
+      if (sock && typeof sock.onWhatsApp === 'function') {
+        const results = await sock.onWhatsApp(jid);
+        if (results && results.length > 0 && results[0].exists && results[0].jid) {
+          jid = results[0].jid;
+        }
+      }
+    } catch (e) {
+      // fallback
+    }
+  }
+
+  // Remove the suffix to have a clean number
+  jid = jid.split('@')[0].split(':')[0];
 
   const content = unwrapMessageContent(message.message);
   const type = extractMessageType(content);
@@ -1903,7 +1963,7 @@ function normalizeIncomingMessage(message) {
     timestamp: normalizeTimestamp(message.messageTimestamp),
     type,
     status: "received",
-    pushName: message.pushName || null,
+    pushName: pushName,
     participant: message.key.participant || null,
     media,
   };
@@ -2159,6 +2219,30 @@ function formatJidForDisplay(jid = "") {
   }
 
   return digits;
+}
+
+async function resolveWaMeLink(link) {
+  return new Promise((resolve) => {
+    https.get(link, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        https.get(res.headers.location, (res2) => {
+          let data = '';
+          res2.on('data', chunk => data += chunk);
+          res2.on('end', () => {
+            const match = data.match(/phone=([0-9]+)/);
+            resolve(match ? match[1] + '@s.whatsapp.net' : null);
+          });
+        }).on('error', () => resolve(null));
+      } else {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          const match = data.match(/phone=([0-9]+)/);
+          resolve(match ? match[1] + '@s.whatsapp.net' : null);
+        });
+      }
+    }).on('error', () => resolve(null));
+  });
 }
 
 function normalizeJidInput(value) {
