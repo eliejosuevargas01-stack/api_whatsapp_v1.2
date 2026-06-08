@@ -13,8 +13,6 @@ const state = {
   settings: null,
   settingsSessionId: "",
   selectedSessionId: "",
-  instagramChallenge: null,
-  instagramChallengeSessionId: "",
   refreshTimer: null,
   settingsRequestId: 0,
 };
@@ -105,18 +103,6 @@ function bindEvents() {
 
         sessionNameInput.value = "";
         sessionPasswordInput.value = "";
-
-        if (response.data?.challenge) {
-          state.instagramChallenge = response.data.challenge;
-          state.instagramChallengeSessionId = response.data.sessionId || name;
-          renderInstagramLoginFrame();
-          sessionNote.textContent = "Resolva o desafio do Instagram na area abaixo.";
-          return;
-        }
-
-        state.instagramChallenge = null;
-        state.instagramChallengeSessionId = "";
-        renderInstagramLoginFrame();
         sessionNote.textContent = "Sessão criada e logada com sucesso.";
         await refreshSessions(true);
       } catch (error) {
@@ -400,119 +386,6 @@ function renderQr(dataUrl) {
   image.src = dataUrl;
   image.alt = "QR Code do WhatsApp";
   qrFrame.appendChild(image);
-}
-
-function renderInstagramLoginFrame() {
-  if (!igLoginFrame) {
-    return;
-  }
-
-  qrFrame.style.display = "none";
-  igLoginFrame.style.display = "flex";
-
-  if (!state.instagramChallenge) {
-    igLoginFrame.innerHTML = '<p class="empty">Sessão do Instagram logada com sucesso.</p>';
-    return;
-  }
-
-  const challenge = state.instagramChallenge;
-  const challengeMessage = challenge.message || "Instagram solicitou verificacao.";
-  const challengeUrl = challenge.challengeUrl
-    ? `<p><a href="${challenge.challengeUrl}" target="_blank" rel="noopener noreferrer">Abrir desafio do Instagram</a></p>`
-    : "";
-
-  const choiceOptions = Array.isArray(challenge.stepData?.choices)
-    ? challenge.stepData.choices
-        .map(
-          (item) =>
-            `<option value="${item}"${
-              item === challenge.stepData.choice ? " selected" : ""
-            }>${item}</option>`,
-        )
-        .join("")
-    : "";
-
-  const choiceField = choiceOptions
-    ? `
-      <div class="field-group">
-        <span>Metodo de verificacao</span>
-        <select id="igChallengeChoice">
-          ${choiceOptions}
-        </select>
-      </div>
-    `
-    : "";
-
-  igLoginFrame.innerHTML = `
-    <div class="instagram-challenge">
-      <p class="empty">${challengeMessage}</p>
-      ${challengeUrl}
-      ${choiceField}
-      <div class="field-group">
-        <span>Código de verificação</span>
-        <input id="igChallengeCode" type="text" placeholder="000000" autocomplete="one-time-code" />
-      </div>
-      <div class="action-row">
-        <button id="igChallengeSubmit" class="action-button" type="button">Enviar código</button>
-      </div>
-      <p id="igChallengeNote" class="notice">Informe o código recebido no Instagram ou escolha um método.</p>
-    </div>
-  `;
-
-  const submitButton = document.getElementById("igChallengeSubmit");
-  if (submitButton) {
-    submitButton.addEventListener("click", handleInstagramChallengeSubmit);
-  }
-}
-
-async function handleInstagramChallengeSubmit() {
-  const codeInput = document.getElementById("igChallengeCode");
-  const choiceSelect = document.getElementById("igChallengeChoice");
-  const note = document.getElementById("igChallengeNote");
-
-  if (note) {
-    note.textContent = "Enviando resposta do desafio...";
-  }
-
-  const payload = {
-    sessionId: state.instagramChallengeSessionId,
-    code: codeInput?.value.trim(),
-  };
-
-  if (choiceSelect?.value) {
-    payload.choice = choiceSelect.value;
-  }
-
-  try {
-    const response = await apiRequest("/api/instagram/challenge", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      throw new Error(response.error || "Falha ao resolver o desafio.");
-    }
-
-    if (response.data?.challenge) {
-      state.instagramChallenge = response.data.challenge;
-      renderInstagramLoginFrame();
-      if (note) {
-        note.textContent = "Informe o próximo código ou escolha outro método.";
-      }
-      return;
-    }
-
-    state.instagramChallenge = null;
-    state.instagramChallengeSessionId = "";
-    renderInstagramLoginFrame();
-    if (note) {
-      note.textContent = "Sessão do Instagram logada com sucesso.";
-    }
-  } catch (error) {
-    if (note) {
-      note.textContent = error.message;
-    }
-  }
 }
 
 function buildSessionNote(session) {
