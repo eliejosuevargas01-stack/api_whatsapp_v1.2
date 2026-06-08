@@ -103,6 +103,14 @@ export async function loginInstagram(username, password) {
 
     instagramClients.set(sessionId, ig);
 
+    // Verificar se há checkpoint pendente
+    if (ig.state.checkpoint) {
+      await ig.challenge.state();
+      const challenge = buildInstagramChallengePayload(ig);
+      instagramChallenges.set(sessionId, challenge);
+      return { challenge, sessionId };
+    }
+
     // Inicia o polling de mensagens
     startPolling(sessionId, ig);
 
@@ -188,6 +196,10 @@ function startPolling(sessionId, ig) {
 
       lastSync = now;
     } catch (e) {
+      if (e instanceof IgCheckpointError) {
+        console.warn(`Instagram checkpoint requerido durante polling [${sessionId}]:`, e.message);
+        return;
+      }
       console.error(`Erro no polling do Instagram [${sessionId}]:`, e.message);
     }
   }, 10000); // 10 segundos de polling
