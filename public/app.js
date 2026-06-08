@@ -26,8 +26,11 @@ const state = {
   conversationSearch: "",
   selectedSessionId: "",
   selectedConversationJid: "",
+  activeTab: "chats", // "chats" or "status"
 };
 
+const chatsTabButton = document.getElementById("chatsTabButton");
+const statusTabButton = document.getElementById("statusTabButton");
 const sessionSelect = document.getElementById("sessionSelect");
 const sessionStatus = document.getElementById("sessionStatus");
 const refreshConversationsButton = document.getElementById("refreshConversationsButton");
@@ -54,9 +57,39 @@ function loadInitialState() {
   const saved = loadPanelState();
   state.selectedSessionId = saved.selectedSessionId || "";
   state.selectedConversationJid = saved.selectedConversationJid || "";
+  state.activeTab = saved.activeTab || "chats";
 }
 
 function bindEvents() {
+  if (chatsTabButton && statusTabButton) {
+    chatsTabButton.addEventListener("click", () => {
+      if (state.activeTab !== "chats") {
+        state.activeTab = "chats";
+        chatsTabButton.classList.add("active");
+        statusTabButton.classList.remove("active");
+        conversationTitle.textContent = "Selecione uma conversa";
+        conversationMeta.textContent = "Escolha uma conversa na lateral para abrir o historico.";
+        document.querySelector(".sidebar .panel-head h2").textContent = "Conversas";
+        persistSelection();
+        state.selectedConversationJid = "";
+        refreshConversations(true, { preserveMessagesScroll: false });
+      }
+    });
+
+    statusTabButton.addEventListener("click", () => {
+      if (state.activeTab !== "status") {
+        state.activeTab = "status";
+        statusTabButton.classList.add("active");
+        chatsTabButton.classList.remove("active");
+        conversationTitle.textContent = "Selecione um status";
+        conversationMeta.textContent = "Escolha um status na lateral para abrir o historico.";
+        document.querySelector(".sidebar .panel-head h2").textContent = "Status e Canais";
+        persistSelection();
+        state.selectedConversationJid = "";
+        refreshConversations(true, { preserveMessagesScroll: false });
+      }
+    });
+  }
   sessionSelect.addEventListener("change", async () => {
     state.selectedSessionId = sessionSelect.value || "";
     state.selectedConversationJid = "";
@@ -102,6 +135,13 @@ function bindEvents() {
 }
 
 async function bootstrap() {
+  if (state.activeTab === "status" && statusTabButton && chatsTabButton) {
+    statusTabButton.classList.add("active");
+    chatsTabButton.classList.remove("active");
+    document.querySelector(".sidebar .panel-head h2").textContent = "Status e Canais";
+    conversationTitle.textContent = "Selecione um status";
+    conversationMeta.textContent = "Escolha um status na lateral para abrir o historico.";
+  }
   startAutoRefresh();
   await refreshSessions(true);
 }
@@ -228,8 +268,9 @@ async function refreshConversations(force = false, options = {}) {
     params.set("search", state.conversationSearch);
   }
 
+  const apiPath = state.activeTab === "status" ? "status" : "conversations";
   const response = await apiRequest(
-    `/api/sessions/${encodeURIComponent(state.selectedSessionId)}/conversations?${params.toString()}`,
+    `/api/sessions/${encodeURIComponent(state.selectedSessionId)}/${apiPath}?${params.toString()}`,
   );
 
   if (!response.ok) {
@@ -701,6 +742,7 @@ function persistSelection() {
   savePanelState({
     selectedSessionId: state.selectedSessionId,
     selectedConversationJid: state.selectedConversationJid,
+    activeTab: state.activeTab,
   });
 }
 
