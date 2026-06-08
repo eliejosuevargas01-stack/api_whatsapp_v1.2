@@ -198,9 +198,13 @@ function startPolling(sessionId, ig) {
     } catch (e) {
       if (e instanceof IgCheckpointError) {
         console.warn(`Instagram checkpoint requerido durante polling [${sessionId}]:`, e.message);
+        clearInterval(interval);
+        instagramIntervals.delete(sessionId);
         return;
       }
-      console.error(`Erro no polling do Instagram [${sessionId}]:`, e.message);
+      // Capturar qualquer outro erro sem derrubar o servidor
+      console.warn(`Erro no polling do Instagram [${sessionId}] - continuando: ${e?.message || e}`);
+      // Não limpar o interval aqui, apenas registrar o erro
     }
   }, 10000); // 10 segundos de polling
 
