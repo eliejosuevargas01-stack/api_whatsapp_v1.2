@@ -46,13 +46,26 @@
         </div>
 
         <form id="sessionForm" class="inline-form">
+          <select id="sessionPlatformSelect" aria-label="Plataforma">
+            <option value="whatsapp">WhatsApp</option>
+            <option value="instagram">Instagram</option>
+          </select>
           <input
             id="sessionNameInput"
             type="text"
             name="name"
-            placeholder="Nova sessão..."
+            placeholder="Nome / Usuário..."
             aria-label="Nova sessão..."
             autocomplete="off"
+          />
+          <input
+            id="sessionPasswordInput"
+            type="password"
+            name="password"
+            placeholder="Senha..."
+            aria-label="Senha do Instagram"
+            autocomplete="off"
+            style="display: none;"
           />
           <button class="action-button" type="submit" aria-label="Adicionar sessão">+</button>
         </form>
@@ -77,6 +90,9 @@
             <div class="session-detail-grid">
               <div class="qr-stage" id="qrFrame">
                 <p class="empty">O QR aparece aqui somente quando voce clicar em conectar.</p>
+              </div>
+              <div class="qr-stage" id="igLoginFrame" style="display: none;">
+                <p class="empty">Status de login do Instagram aparecera aqui.</p>
               </div>
 
               <div class="session-side">
