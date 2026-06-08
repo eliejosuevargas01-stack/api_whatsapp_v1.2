@@ -78,22 +78,27 @@ export async function resolveInstagramChallenge(sessionId, { choice, code } = {}
  */
 export async function loginInstagram(username, password) {
   const ig = new IgApiClient();
+  const identity = String(username || "").trim().toLowerCase();
 
-  // O session ID sera o proprio username neste exemplo
-  const sessionId = username;
+  if (!identity) {
+    throw new Error('Informe um usuario ou email valido para o Instagram.');
+  }
+
+  // O session ID sera o proprio username normalizado.
+  const sessionId = identity;
 
   if (instagramClients.has(sessionId)) {
     return { sessionId, message: 'Sessao ja existente.' };
   }
 
-  ig.state.generateDevice(username);
+  ig.state.generateDevice(identity);
 
   // Evitar simular o dispositivo no PC local.
   // Vamos usar simulate pre ou post login
   await ig.simulate.preLoginFlow();
 
   try {
-    const auth = await ig.account.login(username, password);
+    const auth = await ig.account.login(identity, password);
     process.nextTick(async () => await ig.simulate.postLoginFlow());
 
     instagramClients.set(sessionId, ig);
@@ -110,7 +115,13 @@ export async function loginInstagram(username, password) {
       instagramChallenges.set(sessionId, challenge);
       return { challenge, sessionId };
     }
-    throw new Error(`Falha no login do Instagram: ${error.message}`);
+
+    const message = String(error?.message || 'Erro desconhecido no login do Instagram.');
+    if (message.includes("We can't find an account") || message.includes('não foi encontrado')) {
+      throw new Error('Conta nao encontrada. Verifique se o usuario/telefone esta correto e tente novamente.');
+    }
+
+    throw new Error(`Falha no login do Instagram: ${message}`);
   }
 }
 
