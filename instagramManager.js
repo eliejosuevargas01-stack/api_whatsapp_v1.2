@@ -15,6 +15,21 @@ export function setInstagramSessionsDir(dir) {
 /**
  * Auxiliar para instanciar/retornar o navegador com persistência de perfil do Chromium.
  */
+/**
+ * Cria uma nova página com configurações stealth para bypass de detecção de bots.
+ */
+async function createPage(browser) {
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1280, height: 800 });
+  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => undefined
+    });
+  });
+  return page;
+}
+
 async function getBrowser(username) {
   if (activeBrowsers.has(username)) {
     return activeBrowsers.get(username);
@@ -28,7 +43,8 @@ async function getBrowser(username) {
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
-      '--lang=en-US,en' // força inglês para seletores consistentes
+      '--lang=en-US,en',
+      '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     ],
     userDataDir: userDir
   });
@@ -42,7 +58,7 @@ async function getBrowser(username) {
  */
 export async function loginInstagram(username, password) {
   const browser = await getBrowser(username);
-  const page = await browser.newPage();
+  const page = await createPage(browser);
   
   try {
     await page.goto('https://www.instagram.com/accounts/login/', { waitUntil: 'networkidle2' });
@@ -76,6 +92,14 @@ export async function loginInstagram(username, password) {
     await page.close();
     return { sessionId: username };
   } catch (error) {
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const errorPath = path.join(sessionsDir, `error_login_${username}.png`);
+      await page.screenshot({ path: errorPath });
+      console.log(`[Instagram-Puppeteer] Captura de tela do erro salva em ${errorPath}`);
+    } catch (screenshotErr) {
+      console.error('[Instagram-Puppeteer] Falha ao tirar captura de tela de erro:', screenshotErr.message);
+    }
     await page.close();
     throw error;
   }
@@ -90,7 +114,7 @@ export async function resolveInstagramChallenge(username, code) {
   let page = pages.find(p => p.url().includes('/challenge/'));
   
   if (!page) {
-    page = await browser.newPage();
+    page = await createPage(browser);
     await page.goto('https://www.instagram.com/', { waitUntil: 'networkidle2' });
   }
   
@@ -114,7 +138,7 @@ export async function resolveInstagramChallenge(username, code) {
  */
 export async function sendInstagramMessage(sessionId, usernameTo, text) {
   const browser = await getBrowser(sessionId);
-  const page = await browser.newPage();
+  const page = await createPage(browser);
   
   try {
     await page.goto(`https://www.instagram.com/${usernameTo}/`, { waitUntil: 'networkidle2' });
@@ -198,7 +222,7 @@ export async function getInstagramSessionsList() {
  */
 export async function getInstagramConversations(sessionId) {
   const browser = await getBrowser(sessionId);
-  const page = await browser.newPage();
+  const page = await createPage(browser);
   
   try {
     await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'networkidle2' });
@@ -207,7 +231,7 @@ export async function getInstagramConversations(sessionId) {
       throw new Error('Sessão expirou ou não está logada.');
     }
     
-    // Busca a lista lateral de conversas
+    // Busca la lista lateral de conversas
     const conversations = await page.evaluate(() => {
       const anchors = Array.from(document.querySelectorAll('a[href*="/direct/t/"]'));
       
@@ -250,7 +274,7 @@ export async function getInstagramConversations(sessionId) {
  */
 export async function getInstagramThreadMessages(sessionId, threadId) {
   const browser = await getBrowser(sessionId);
-  const page = await browser.newPage();
+  const page = await createPage(browser);
   
   try {
     await page.goto(`https://www.instagram.com/direct/t/${threadId}/`, { waitUntil: 'networkidle2' });
@@ -312,7 +336,7 @@ export async function getInstagramThreadMessages(sessionId, threadId) {
  */
 export async function sendInstagramThreadMessage(sessionId, threadId, text) {
   const browser = await getBrowser(sessionId);
-  const page = await browser.newPage();
+  const page = await createPage(browser);
   
   try {
     await page.goto(`https://www.instagram.com/direct/t/${threadId}/`, { waitUntil: 'networkidle2' });
