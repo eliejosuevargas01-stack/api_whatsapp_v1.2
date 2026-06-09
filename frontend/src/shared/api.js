@@ -1,4 +1,4 @@
-export const storageKey = "api-whatsapp-panel";
+export const storageKey = "api-whatsapp-panel-react";
 
 export function loadPanelState() {
   try {
@@ -35,13 +35,17 @@ export async function apiRequest(path, options = {}) {
       status: response.status,
       data,
       error: data?.message || data?.error || "",
+      isCheckpoint: data?.isCheckpoint || false,
+      username: data?.username || "",
+      ...data
     };
   } catch (error) {
     return {
       ok: false,
       status: 0,
       data: null,
-      error: error?.message || "Falha de rede.",
+      error: error?.message || "Erro de conexão com o servidor.",
+      isCheckpoint: false
     };
   }
 }
@@ -87,24 +91,7 @@ export function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("Nao foi possivel ler o arquivo."));
+    reader.onerror = () => reject(new Error("Não foi possível ler o arquivo."));
     reader.readAsDataURL(file);
   });
-}
-
-export function getSessionById(sessions, sessionId) {
-  return sessions.find((session) => session.id === sessionId) || null;
-}
-
-export function initTheme() {
-  const savedState = loadPanelState();
-  const theme = savedState.theme || "dark";
-  document.documentElement.setAttribute("data-theme", theme);
-}
-
-export function toggleTheme() {
-  const currentTheme = document.documentElement.getAttribute("data-theme");
-  const newTheme = currentTheme === "light" ? "dark" : "light";
-  document.documentElement.setAttribute("data-theme", newTheme);
-  savePanelState({ theme: newTheme });
 }

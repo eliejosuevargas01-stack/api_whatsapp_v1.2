@@ -1,0 +1,11 @@
+{
+  "ignore": [
+    "data/**",
+    "sessions/**",
+    "temp_repo/**",
+    "public/**",
+    "frontend/**",
+    "node_modules/**"
+  ],
+  "ext": "js,mjs,json"
+}

@@ -5,3 +5,7 @@ coverage/
 *.log
 .env*
 !.env.example
+.venv/
+__pycache__/
+sessions/
+data/

@@ -20,6 +20,7 @@
     "fastify": "^4.28.1",
     "instagram-private-api": "^1.46.1",
     "pino": "^9.3.2",
+    "puppeteer": "^24.43.1",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {

@@ -3,7 +3,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { EventEmitter } from "node:events";
-import { loginInstagram, sendInstagramMessage, igEmitter, logoutInstagram } from "./instagramManager.js";
+import {
+  loginInstagram,
+  sendInstagramMessage,
+  igEmitter,
+  logoutInstagram,
+  resolveInstagramChallenge,
+  initInstagramSessions,
+  getInstagramSessionsList,
+  getInstagramConversations,
+  getInstagramThreadMessages,
+  sendInstagramThreadMessage
+} from "./instagramManager.js";
 import https from "node:https";
 
 import rateLimit from "@fastify/rate-limit";
@@ -178,6 +189,10 @@ app.get("/sessoes", async (request, reply) =>
   reply.header("Cache-Control", "no-store").sendFile("sessions.html"),
 );
 
+app.get("/instagram.html", async (request, reply) =>
+  reply.header("Cache-Control", "no-store").sendFile("instagram.html"),
+);
+
 app.get("/api/health", async () => ({
   ok: true,
   uptimeSeconds: Math.floor(process.uptime()),
@@ -226,6 +241,24 @@ app.put("/api/settings", async (request, reply) => {
 
 app.get("/api/sessions/:sessionId/settings", async (request, reply) => {
   const { sessionId } = request.params;
+  const isInstagram = (await getInstagramSessionsList()).some(s => s.id === sessionId);
+
+  if (isInstagram) {
+    return {
+      settings: {
+        webhook: {
+          enabled: false,
+          url: "",
+          secret: "",
+          allowPrivate: true,
+          allowGroups: false,
+          allowNewsletters: false,
+          allowBroadcasts: false,
+          includeFromMe: false,
+        },
+      },
+    };
+  }
 
   if (!sessionManager.hasSession(sessionId)) {
     return reply.code(404).send({
@@ -243,6 +276,25 @@ app.get("/api/sessions/:sessionId/settings", async (request, reply) => {
 
 app.put("/api/sessions/:sessionId/settings", async (request, reply) => {
   const { sessionId } = request.params;
+  const isInstagram = (await getInstagramSessionsList()).some(s => s.id === sessionId);
+
+  if (isInstagram) {
+    return {
+      ok: true,
+      settings: {
+        webhook: {
+          enabled: false,
+          url: "",
+          secret: "",
+          allowPrivate: true,
+          allowGroups: false,
+          allowNewsletters: false,
+          allowBroadcasts: false,
+          includeFromMe: false,
+        },
+      },
+    };
+  }
 
   if (!sessionManager.hasSession(sessionId)) {
     return reply.code(404).send({
@@ -276,9 +328,18 @@ app.put("/api/sessions/:sessionId/settings", async (request, reply) => {
   }
 });
 
-app.get("/api/sessions", async () => ({
-  sessions: sessionManager.listSessions(),
-}));
+app.get("/api/sessions", async () => {
+  const whatsappSessions = sessionManager.listSessions();
+  let instagramSessions = [];
+  try {
+    instagramSessions = await getInstagramSessionsList();
+  } catch (error) {
+    app.log.error(error, "Falha ao obter lista de sessoes do Instagram.");
+  }
+  return {
+    sessions: [...whatsappSessions, ...instagramSessions],
+  };
+});
 
 app.post("/api/sessions", async (request, reply) => {
   const name = String(request.body?.name || "").trim();
@@ -345,14 +406,32 @@ app.post("/api/sessions/:sessionId/disconnect", async (request, reply) => {
 });
 
 app.delete("/api/sessions/:sessionId", async (request, reply) => {
-  if (!sessionManager.hasSession(request.params.sessionId)) {
+  const { sessionId } = request.params;
+  const isInstagram = (await getInstagramSessionsList()).some(s => s.id === sessionId);
+
+  if (isInstagram) {
+    try {
+      await logoutInstagram(sessionId);
+      return {
+        ok: true,
+        removedSessionId: sessionId,
+      };
+    } catch (error) {
+      return reply.code(400).send({
+        error: "bad_request",
+        message: error.message || "Nao foi possivel excluir a sessao do Instagram.",
+      });
+    }
+  }
+
+  if (!sessionManager.hasSession(sessionId)) {
     return reply.code(404).send({
       error: "not_found",
       message: "Sessao nao encontrada.",
     });
   }
 
-  const removedSessionId = await sessionManager.removeSession(request.params.sessionId);
+  const removedSessionId = await sessionManager.removeSession(sessionId);
   return {
     ok: true,
     removedSessionId,
@@ -360,18 +439,36 @@ app.delete("/api/sessions/:sessionId", async (request, reply) => {
 });
 
 app.post("/api/sessions/:sessionId/logout", async (request, reply) => {
-  if (!sessionManager.hasSession(request.params.sessionId)) {
+  const { sessionId } = request.params;
+  const isInstagram = (await getInstagramSessionsList()).some(s => s.id === sessionId);
+
+  if (isInstagram) {
+    try {
+      await logoutInstagram(sessionId);
+      return {
+        ok: true,
+        snapshot: { status: "disconnected" },
+      };
+    } catch (error) {
+      return reply.code(400).send({
+        error: "bad_request",
+        message: error.message || "Nao foi possivel desconectar a sessao do Instagram.",
+      });
+    }
+  }
+
+  if (!sessionManager.hasSession(sessionId)) {
     return reply.code(404).send({
       error: "not_found",
       message: "Sessao nao encontrada.",
     });
   }
 
-  const snapshot = await sessionManager.logout(request.params.sessionId);
+  const snapshot = await sessionManager.logout(sessionId);
   return {
     ok: true,
     snapshot,
-    session: sessionManager.getSessionSummary(request.params.sessionId),
+    session: sessionManager.getSessionSummary(sessionId),
   };
 });
 
@@ -531,7 +628,23 @@ app.post("/api/instagram/login", async (request, reply) => {
     const session = await loginInstagram(username, password);
     return { ok: true, session };
   } catch (error) {
-    return reply.code(400).send({ error: "login_failed", message: error.message });
+    return reply.code(400).send({ error: "login_failed", message: error.message, isCheckpoint: error.isCheckpoint });
+  }
+});
+
+app.post("/api/instagram/challenge", async (request, reply) => {
+  const username = request.body?.username;
+  const code = request.body?.code;
+
+  if (!username || !code) {
+    return reply.code(400).send({ error: "bad_request", message: "Informe username e o codigo." });
+  }
+
+  try {
+    const result = await resolveInstagramChallenge(username, code);
+    return { ok: true, message: result.message };
+  } catch (error) {
+    return reply.code(400).send({ error: "challenge_failed", message: error.message });
   }
 });
 
@@ -548,7 +661,65 @@ app.post("/api/instagram/send", async (request, reply) => {
     const result = await sendInstagramMessage(sessionId, usernameTo, text);
     return { ok: true, result };
   } catch (error) {
-    return reply.code(400).send({ error: "send_failed", message: error.message });
+    return reply.code(400).send({ error: error.errorCode || "send_failed", message: error.message, isCheckpoint: error.isCheckpoint });
+  }
+});
+
+app.get("/api/instagram/sessions", async (request, reply) => {
+  try {
+    const sessions = await getInstagramSessionsList();
+    return { sessions };
+  } catch (error) {
+    return reply.code(500).send({ error: "server_error", message: error.message });
+  }
+});
+
+app.post("/api/instagram/sessions/:username/logout", async (request, reply) => {
+  const { username } = request.params;
+  try {
+    await logoutInstagram(username);
+    return { ok: true };
+  } catch (error) {
+    return reply.code(400).send({ error: "logout_failed", message: error.message });
+  }
+});
+
+app.get("/api/instagram/sessions/:username/conversations", async (request, reply) => {
+  const { username } = request.params;
+  try {
+    const conversations = await getInstagramConversations(username);
+    return { conversations };
+  } catch (error) {
+    return reply.code(400).send({ error: "bad_request", message: error.message, isCheckpoint: error.isCheckpoint });
+  }
+});
+
+app.get("/api/instagram/sessions/:username/conversations/:threadId/messages", async (request, reply) => {
+  const { username, threadId } = request.params;
+  try {
+    const messages = await getInstagramThreadMessages(username, threadId);
+    return {
+      conversation: { title: "Conversa Instagram", jid: threadId },
+      messages
+    };
+  } catch (error) {
+    return reply.code(400).send({ error: "bad_request", message: error.message, isCheckpoint: error.isCheckpoint });
+  }
+});
+
+app.post("/api/instagram/sessions/:username/conversations/:threadId/messages/send", async (request, reply) => {
+  const { username, threadId } = request.params;
+  const text = String(request.body?.text || "").trim();
+  
+  if (!text) {
+    return reply.code(400).send({ error: "bad_request", message: "Informe o texto da mensagem." });
+  }
+  
+  try {
+    const result = await sendInstagramThreadMessage(username, threadId, text);
+    return { ok: true, result };
+  } catch (error) {
+    return reply.code(400).send({ error: "send_failed", message: error.message, isCheckpoint: error.isCheckpoint });
   }
 });
 
@@ -717,6 +888,11 @@ try {
 
   if (config.autoConnect) {
     void sessionManager.autoConnectExistingSessions();
+    try {
+      await initInstagramSessions(config.sessionsDir);
+    } catch (igError) {
+      app.log.error({ error: igError }, "Falha ao restaurar sessoes do Instagram.");
+    }
   }
 } catch (error) {
   app.log.error({ error }, "Falha ao iniciar o servidor.");
@@ -1383,12 +1559,63 @@ function createSessionManager({
       await fs.rm(sessionDir, { recursive: true, force: true });
     };
 
+    const verifyNumberExists = async (jid) => {
+      const checkJid = async (targetJid) => {
+        try {
+          const checkResult = await state.socket.onWhatsApp(targetJid);
+          if (checkResult && checkResult.length > 0) {
+            const [existsResult] = checkResult;
+            if (existsResult && existsResult.exists) {
+              return existsResult.jid;
+            }
+          }
+        } catch (e) {}
+        return null;
+      };
+
+      try {
+        const resolved = await checkJid(jid);
+        if (resolved) return resolved;
+
+        const brMatch = jid.match(/^55(\d{2})(\d+)(@s\.whatsapp\.net)$/);
+        if (brMatch) {
+          const ddd = brMatch[1];
+          const number = brMatch[2];
+          let altJid = null;
+
+          if (number.length === 9 && number.startsWith("9")) {
+            altJid = `55${ddd}${number.slice(1)}@s.whatsapp.net`;
+          } else if (number.length === 8) {
+            altJid = `55${ddd}9${number}@s.whatsapp.net`;
+          }
+
+          if (altJid) {
+            app.log.info({ jid, altJid }, "Tentando alternativa de 8/9 digitos para numero brasileiro...");
+            const altResolved = await checkJid(altJid);
+            if (altResolved) {
+              app.log.info({ jid, altResolved }, "Alternativa de 8/9 digitos encontrada e resolvida.");
+              return altResolved;
+            }
+          }
+        }
+
+        throw new Error("O numero informado nao esta registrado no WhatsApp.");
+      } catch (checkErr) {
+        if (checkErr.message.includes("nao esta registrado")) {
+          throw checkErr;
+        }
+        app.log.warn({ error: checkErr, jid }, "Falha ao verificar numero via onWhatsApp. Prosseguindo com o original.");
+        return jid;
+      }
+    };
+
     const sendText = async (jidInput, text) => {
       if (!state.socket || state.status !== "connected") {
         throw new Error("Sessao nao esta conectada.");
       }
 
-      const jid = normalizeJidInput(jidInput);
+      const rawJid = normalizeJidInput(jidInput);
+      const jid = await verifyNumberExists(rawJid);
       const response = await state.socket.sendMessage(jid, { text });
       const storedMessage = recordMessage(sessionId, {
         id: response?.key?.id || `local_${Date.now()}`,
@@ -1413,7 +1640,8 @@ function createSessionManager({
         throw new Error("Sessao nao esta conectada.");
       }
 
-      const jid = normalizeJidInput(jidInput);
+      const rawJid = normalizeJidInput(jidInput);
+      const jid = await verifyNumberExists(rawJid);
       const prepared = prepareOutgoingMediaPayload(payload);
       const response = await state.socket.sendMessage(jid, prepared.content);
       const messageId = response?.key?.id || `local_${Date.now()}`;
@@ -2287,11 +2515,22 @@ async function resolveWaMeLink(link) {
 }
 
 function normalizeJidInput(value) {
-  if (String(value).includes("@")) {
-    return String(value).trim();
+  let valStr = String(value).trim();
+  if (valStr.includes("@")) {
+    return valStr;
   }
 
-  const digits = String(value).replace(/\D/g, "");
+  const phoneUrlMatch = valStr.match(/(?:wa\.me|api\.whatsapp\.com|web\.whatsapp\.com)\/(?:send\/?\?phone=)?([0-9]+)/i);
+  if (phoneUrlMatch) {
+    return `${phoneUrlMatch[1]}@s.whatsapp.net`;
+  }
+
+  const simpleMatch = valStr.match(/(?:wa\.me)\/([0-9]+)/i);
+  if (simpleMatch) {
+    return `${simpleMatch[1]}@s.whatsapp.net`;
+  }
+
+  const digits = valStr.replace(/\D/g, "");
   if (!digits) {
     throw new Error("Numero invalido.");
   }
