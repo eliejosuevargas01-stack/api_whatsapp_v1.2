@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, Send, Paperclip, X, MessageSquare, Radio, HelpCircle, FileText, Image as ImageIcon, Check, CheckCheck } from 'lucide-react';
-import { apiRequest, formatDateTime, buildMediaUrl, fileToDataUrl } from '../shared/api';
+import { apiRequest, formatDateTime, buildMediaUrl, fileToDataUrl, formatStatus } from '../shared/api';
 
 export default function WhatsAppTab({ sessions, selectedSessionId, setSelectedSessionId }) {
   const [activeSubTab, setActiveSubTab] = useState('chats'); // 'chats' or 'status'
