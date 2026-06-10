@@ -749,15 +749,14 @@ app.post("/api/sessions/:sessionId/messages/send", async (request, reply) => {
   let message;
 
   try {
-    if (link && !jid) {
-      const waMeMatch = link.match(/https?:\/\/(?:wa\.me|api\.whatsapp\.com)\/message\/([a-zA-Z0-9]+)/i);
-      if (waMeMatch) {
-        const resolvedJid = await resolveWaMeLink(link);
-        if (resolvedJid) {
-          jid = resolvedJid;
-        } else {
-          return reply.code(400).send({ error: "bad_request", message: "Nao foi possivel extrair o numero do link fornecido." });
-        }
+    // Resolve link if provided as jid or link
+    const target = jid || link;
+    if (target.startsWith("http") || target.includes("wa.me") || target.includes("api.whatsapp.com") || target.includes("web.whatsapp.com")) {
+      const extracted = await extractJidFromLink(target);
+      if (extracted) {
+        jid = extracted;
+      } else {
+        return reply.code(400).send({ error: "bad_request", message: "Nao foi possivel extrair o numero do link fornecido." });
       }
     }
 
@@ -1562,14 +1561,19 @@ function createSessionManager({
     const verifyNumberExists = async (jid) => {
       const checkJid = async (targetJid) => {
         try {
+          app.log.info({ sessionId, targetJid }, "Verificando se o numero existe no WhatsApp via onWhatsApp...");
           const checkResult = await state.socket.onWhatsApp(targetJid);
           if (checkResult && checkResult.length > 0) {
             const [existsResult] = checkResult;
             if (existsResult && existsResult.exists) {
+              app.log.info({ sessionId, targetJid, resolvedJid: existsResult.jid }, "Numero verificado com sucesso no WhatsApp.");
               return existsResult.jid;
             }
           }
-        } catch (e) {}
+          app.log.info({ sessionId, targetJid }, "Numero nao existe no WhatsApp.");
+        } catch (e) {
+          app.log.error({ sessionId, targetJid, error: e }, "Erro ao executar onWhatsApp.");
+        }
         return null;
       };
 
@@ -1590,10 +1594,10 @@ function createSessionManager({
           }
 
           if (altJid) {
-            app.log.info({ jid, altJid }, "Tentando alternativa de 8/9 digitos para numero brasileiro...");
+            app.log.info({ sessionId, jid, altJid }, "Tentando alternativa de 8/9 digitos para numero brasileiro...");
             const altResolved = await checkJid(altJid);
             if (altResolved) {
-              app.log.info({ jid, altResolved }, "Alternativa de 8/9 digitos encontrada e resolvida.");
+              app.log.info({ sessionId, jid, altResolved }, "Alternativa de 8/9 digitos encontrada e resolvida.");
               return altResolved;
             }
           }
@@ -1604,7 +1608,7 @@ function createSessionManager({
         if (checkErr.message.includes("nao esta registrado")) {
           throw checkErr;
         }
-        app.log.warn({ error: checkErr, jid }, "Falha ao verificar numero via onWhatsApp. Prosseguindo com o original.");
+        app.log.warn({ sessionId, error: checkErr, jid }, "Falha ao verificar numero via onWhatsApp. Prosseguindo com o original.");
         return jid;
       }
     };
@@ -2514,28 +2518,74 @@ async function resolveWaMeLink(link) {
   });
 }
 
+async function extractJidFromLink(urlStr) {
+  if (!urlStr) return null;
+  const cleanUrl = urlStr.trim();
+  
+  // 1. Check if it's a short link that requires resolving: /message/XXXXXX
+  const waMeShortMatch = cleanUrl.match(/https?:\/\/(?:wa\.me|api\.whatsapp\.com)\/message\/([a-zA-Z0-9]+)/i);
+  if (waMeShortMatch) {
+    const resolved = await resolveWaMeLink(cleanUrl);
+    if (resolved) {
+      return normalizeJidInput(resolved);
+    }
+  }
+
+  // 2. Check if it's a standard wa.me/number link, e.g. wa.me/5511999999999
+  const phoneUrlMatch = cleanUrl.match(/(?:wa\.me|api\.whatsapp\.com|web\.whatsapp\.com)\/(?:send\/?\?phone=)?(\+?[0-9\-\s\(\)]+)/i);
+  if (phoneUrlMatch) {
+    return normalizeJidInput(phoneUrlMatch[1]);
+  }
+
+  const simpleMatch = cleanUrl.match(/(?:wa\.me)\/(\+?[0-9\-\s\(\)]+)/i);
+  if (simpleMatch) {
+    return normalizeJidInput(simpleMatch[1]);
+  }
+
+  return null;
+}
+
+
 function normalizeJidInput(value) {
   let valStr = String(value).trim();
+  
+  let domain = "@s.whatsapp.net";
+  let numberPart = valStr;
+  
   if (valStr.includes("@")) {
-    return valStr;
+    const parts = valStr.split("@");
+    numberPart = parts[0];
+    domain = "@" + parts[1];
+  } else {
+    const phoneUrlMatch = valStr.match(/(?:wa\.me|api\.whatsapp\.com|web\.whatsapp\.com)\/(?:send\/?\?phone=)?([0-9]+)/i);
+    if (phoneUrlMatch) {
+      numberPart = phoneUrlMatch[1];
+    } else {
+      const simpleMatch = valStr.match(/(?:wa\.me)\/([0-9]+)/i);
+      if (simpleMatch) {
+        numberPart = simpleMatch[1];
+      }
+    }
   }
 
-  const phoneUrlMatch = valStr.match(/(?:wa\.me|api\.whatsapp\.com|web\.whatsapp\.com)\/(?:send\/?\?phone=)?([0-9]+)/i);
-  if (phoneUrlMatch) {
-    return `${phoneUrlMatch[1]}@s.whatsapp.net`;
-  }
-
-  const simpleMatch = valStr.match(/(?:wa\.me)\/([0-9]+)/i);
-  if (simpleMatch) {
-    return `${simpleMatch[1]}@s.whatsapp.net`;
-  }
-
-  const digits = valStr.replace(/\D/g, "");
+  const digits = numberPart.replace(/\D/g, "");
   if (!digits) {
     throw new Error("Numero invalido.");
   }
 
-  return `${digits}@s.whatsapp.net`;
+  if (domain !== "@s.whatsapp.net" && domain !== "@c.us") {
+    return `${digits}${domain}`;
+  }
+
+  let cleanNumber = digits;
+  if (cleanNumber.length === 10 || cleanNumber.length === 11) {
+    const ddd = parseInt(cleanNumber.slice(0, 2), 10);
+    if (ddd >= 11 && ddd <= 99) {
+      cleanNumber = "55" + cleanNumber;
+    }
+  }
+
+  return `${cleanNumber}@s.whatsapp.net`;
 }
 
 function normalizeOutboundMediaInput(input) {
