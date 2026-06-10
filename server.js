@@ -499,7 +499,7 @@ app.get("/api/sessions/:sessionId/conversations", async (request, reply) => {
   const search = String(request.query?.search || "").trim().toLowerCase();
 
   return {
-    conversations: listSessionConversations(sessionId, stores, { limit, search }).filter(c => c.kind !== "newsletter" && c.kind !== "broadcast"),
+    conversations: listSessionConversations(sessionId, stores, { limit, search, kind: "private" }),
   };
 });
 
@@ -517,7 +517,7 @@ app.get("/api/sessions/:sessionId/status", async (request, reply) => {
   const search = String(request.query?.search || "").trim().toLowerCase();
 
   return {
-    conversations: listSessionConversations(sessionId, stores, { limit, search }).filter(c => c.kind === "newsletter" || c.kind === "broadcast"),
+    conversations: listSessionConversations(sessionId, stores, { limit, search, kind: "status" }),
   };
 });
 
@@ -2351,12 +2351,19 @@ function createSessionManager({
   };
 }
 
-function listSessionConversations(sessionId, stores, { limit, search }) {
+function listSessionConversations(sessionId, stores, { limit, search, kind }) {
   const bucket = ensureConversationBucket(stores.conversations, sessionId);
 
   return Object.values(bucket)
     .map((conversation) => buildConversationSummary(sessionId, conversation, stores))
     .filter((conversation) => {
+      if (kind === "private" && conversation.kind !== "private") {
+        return false;
+      }
+      if (kind === "status" && conversation.kind === "private") {
+        return false;
+      }
+
       if (!search) {
         return true;
       }
@@ -2446,12 +2453,14 @@ function buildConversationSummary(sessionId, conversation, stores) {
     jid: conversation.jid,
     displayJid: identity.displayJid,
     title: identity.title,
-    kind: conversation.kind || getConversationKind(conversation.jid),
+    kind: getConversationKind(conversation.jid),
     updatedAt: Number(conversation.updatedAt || Date.now()),
     unreadCount: Number(conversation.unreadCount || 0),
     preview: conversation.preview || "",
     lastMessageAt: Number(conversation.lastMessageAt || conversation.updatedAt || Date.now()),
+    lastMessageTimestamp: Math.floor(Number(conversation.lastMessageAt || conversation.updatedAt || Date.now()) / 1000),
     messageCount: Number(conversation.messageCount || 0),
+    imgUrl: identity.contact?.imgUrl || null,
   };
 }
 
@@ -3488,7 +3497,7 @@ function normalizeConversationEntry(entry, jid) {
   return {
     jid,
     title: entry?.title || formatJidForDisplay(jid),
-    kind: entry?.kind || getConversationKind(jid),
+    kind: getConversationKind(jid),
     updatedAt: Number(entry?.updatedAt || Date.now()),
     unreadCount: Number(entry?.unreadCount || 0),
     preview: entry?.preview || "",

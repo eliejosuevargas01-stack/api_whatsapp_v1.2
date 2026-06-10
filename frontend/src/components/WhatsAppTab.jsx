@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Send, Paperclip, X, MessageSquare, Radio, HelpCircle, FileText, Image as ImageIcon, Check, CheckCheck } from 'lucide-react';
+import { Search, Send, Paperclip, X, MessageSquare, Radio, HelpCircle, FileText, Image as ImageIcon, Check, CheckCheck, RefreshCw } from 'lucide-react';
 import { apiRequest, formatDateTime, buildMediaUrl, fileToDataUrl, formatStatus } from '../shared/api';
 
 export default function WhatsAppTab({ sessions, selectedSessionId, setSelectedSessionId }) {
@@ -389,7 +389,15 @@ export default function WhatsAppTab({ sessions, selectedSessionId, setSelectedSe
                 onClick={() => selectConversation(convo.jid)}
               >
                 <div className="convo-avatar">
-                  <MessageSquare size={20} />
+                  {convo.imgUrl ? (
+                    <img 
+                      src={convo.imgUrl} 
+                      alt="Avatar" 
+                      style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} 
+                    />
+                  ) : (
+                    <MessageSquare size={20} />
+                  )}
                 </div>
                 <div className="convo-info">
                   <div className="convo-name-row">
@@ -413,9 +421,22 @@ export default function WhatsAppTab({ sessions, selectedSessionId, setSelectedSe
         {selectedJid ? (
           <>
             <div className="chat-window-header glass-panel">
-              <div className="header-info">
-                <h3>{conversationDetail?.title || selectedJid.split('@')[0]}</h3>
-                <span className="sub">{selectedJid}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                {conversationDetail?.imgUrl ? (
+                  <img 
+                    src={conversationDetail.imgUrl} 
+                    alt="Avatar" 
+                    style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover' }} 
+                  />
+                ) : (
+                  <div className="convo-avatar" style={{ width: '40px', height: '40px' }}>
+                    <MessageSquare size={18} />
+                  </div>
+                )}
+                <div className="header-info">
+                  <h3 style={{ margin: 0 }}>{conversationDetail?.title || selectedJid.split('@')[0]}</h3>
+                  <span className="sub">{selectedJid}</span>
+                </div>
               </div>
               {notice && <div className="header-notice-pill">{notice}</div>}
             </div>
