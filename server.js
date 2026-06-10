@@ -817,6 +817,58 @@ app.post("/api/sessions/:sessionId/messages/send", async (request, reply) => {
   };
 });
 
+app.get("/api/sessions/:sessionId/check-number", async (request, reply) => {
+  const { sessionId } = request.params;
+  let phone = String(request.query?.phone || request.query?.number || request.query?.jid || "").trim();
+
+  if (!sessionManager.hasSession(sessionId)) {
+    return reply.code(404).send({
+      error: "not_found",
+      message: "Sessao nao encontrada.",
+    });
+  }
+
+  if (!phone) {
+    return reply.code(400).send({
+      error: "bad_request",
+      message: "Informe o numero ou link no parametro phone, number ou jid.",
+    });
+  }
+
+  const summary = sessionManager.getSessionSummary(sessionId);
+  if (!summary || summary.snapshot?.status !== "connected") {
+    return reply.code(400).send({
+      error: "session_not_connected",
+      message: "A sessao do WhatsApp nao esta conectada.",
+    });
+  }
+
+  try {
+    // Resolve link if it is a link
+    if (phone.startsWith("http") || phone.includes("wa.me") || phone.includes("api.whatsapp.com") || phone.includes("web.whatsapp.com")) {
+      const extracted = await extractJidFromLink(phone);
+      if (extracted) {
+        phone = extracted;
+      } else {
+        return reply.code(400).send({ error: "bad_request", message: "Nao foi possivel extrair o numero do link fornecido." });
+      }
+    }
+
+    const rawJid = normalizeJidInput(phone);
+    const resolvedJid = await sessionManager.verifyNumberExists(sessionId, rawJid);
+    return {
+      exists: true,
+      jid: resolvedJid,
+      number: resolvedJid.split("@")[0]
+    };
+  } catch (error) {
+    return {
+      exists: false,
+      message: error.message || "O numero nao esta registrado no WhatsApp."
+    };
+  }
+});
+
 app.get("/api/sessions/:sessionId/media", async (request, reply) => {
   const { sessionId } = request.params;
   const messageId = String(request.query?.messageId || "").trim();
@@ -1772,6 +1824,7 @@ function createSessionManager({
       sendMedia,
       sendText,
       getSnapshot,
+      verifyNumberExists,
     };
   };
 
@@ -1891,6 +1944,7 @@ function createSessionManager({
     resolveMessageMedia: async (sessionId, message) => getService(sessionId).resolveMessageMedia(message),
     sendMedia: async (sessionId, jid, payload) => getService(sessionId).sendMedia(jid, payload),
     sendText: async (sessionId, jid, text) => getService(sessionId).sendText(jid, text),
+    verifyNumberExists: async (sessionId, jid) => getService(sessionId).verifyNumberExists(jid),
     autoConnectExistingSessions,
     disconnectAll,
   };
