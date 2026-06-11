@@ -2664,17 +2664,13 @@ async function normalizeIncomingMessage(sock, message) {
     jid = message.key.participant;
   }
 
-  if (jid.includes(':') || jid.endsWith('@lid')) {
-    try {
-      if (sock && typeof sock.onWhatsApp === 'function') {
-        const results = await sock.onWhatsApp(jid);
-        if (results && results.length > 0 && results[0].exists && results[0].jid) {
-          jid = results[0].jid;
-        }
-      }
-    } catch (e) {
-      // fallback
-    }
+  // Remove the device suffix locally. We avoid using sock.onWhatsApp here because
+  // executing queries during history sync overloads the connection and triggers
+  // WhatsApp's rate limit / connection close.
+  if (jid.includes(':')) {
+    const parts = jid.split('@');
+    const cleanUser = parts[0].split(':')[0];
+    jid = parts[1] ? `${cleanUser}@${parts[1]}` : cleanUser;
   }
 
   // Remove the suffix to have a clean number
