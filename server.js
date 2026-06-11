@@ -1553,7 +1553,7 @@ function createSessionManager({
     return normalizedRecord;
   };
 
-  const importHistorySync = async (sessionId, event) => {
+  const importHistorySync = async (sessionId, event, sock) => {
     let changed = false;
     let importedCount = 0;
     const contactsChanged = absorbContacts(sessionId, event.contacts || []);
@@ -1587,7 +1587,7 @@ function createSessionManager({
       }
 
       for (const chatMessage of extractHistoryChatMessages(chat)) {
-        const normalizedMessage = await normalizeIncomingMessage(state.socket, chatMessage);
+        const normalizedMessage = await normalizeIncomingMessage(sock, chatMessage);
         if (!normalizedMessage) {
           continue;
         }
@@ -1606,7 +1606,7 @@ function createSessionManager({
     }
 
     for (const historyMessage of event.messages || []) {
-      const normalizedMessage = await normalizeIncomingMessage(state.socket, historyMessage);
+      const normalizedMessage = await normalizeIncomingMessage(sock, historyMessage);
       if (!normalizedMessage) {
         continue;
       }
@@ -1799,7 +1799,7 @@ function createSessionManager({
         return;
       }
 
-      const result = await importHistorySync(sessionId, event);
+      const result = await importHistorySync(sessionId, event, state.socket);
       const requestId = result.requestId;
 
       if (requestId && state.pendingHistoryRequests.has(requestId)) {
