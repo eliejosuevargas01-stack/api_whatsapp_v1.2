@@ -1840,6 +1840,88 @@ function createSessionManager({
       }
     };
 
+    const handleGroupsUpsert = async (groups) => {
+      if (state.removed || !Array.isArray(groups) || !groups.length) return;
+      let changed = false;
+      for (const group of groups) {
+        if (!group?.id) continue;
+
+        // Push group to contacts to make sure getPreferredContactName can find it
+        if (typeof group.subject === "string" && group.subject.trim()) {
+           absorbContacts(sessionId, [{ id: group.id, name: group.subject.trim() }]);
+        }
+
+        const conversation = ensureConversationMeta(stores, sessionId, group.id);
+        const name = typeof group.subject === "string" ? group.subject.trim() : "";
+        if (name && conversation.title !== name) {
+          conversation.title = name;
+          changed = true;
+        }
+      }
+      if (changed) void persistConversations();
+    };
+
+    const handleGroupsUpdate = async (groups) => {
+      if (state.removed || !Array.isArray(groups) || !groups.length) return;
+      let changed = false;
+      for (const group of groups) {
+        if (!group?.id) continue;
+
+        // Push group to contacts to make sure getPreferredContactName can find it
+        if (typeof group.subject === "string" && group.subject.trim()) {
+           absorbContacts(sessionId, [{ id: group.id, name: group.subject.trim() }]);
+        }
+
+        const conversation = ensureConversationMeta(stores, sessionId, group.id);
+        const name = typeof group.subject === "string" ? group.subject.trim() : "";
+        if (name && conversation.title !== name) {
+          conversation.title = name;
+          changed = true;
+        }
+      }
+      if (changed) void persistConversations();
+    };
+
+    const handleChatsUpsert = async (chats) => {
+      if (state.removed || !Array.isArray(chats) || !chats.length) return;
+      let changed = false;
+      for (const chat of chats) {
+        if (!chat?.id) continue;
+
+        if (typeof chat.name === "string" && chat.name.trim()) {
+           absorbContacts(sessionId, [{ id: chat.id, name: chat.name.trim() }]);
+        }
+
+        const conversation = ensureConversationMeta(stores, sessionId, chat.id);
+        const name = typeof chat.name === "string" ? chat.name.trim() : "";
+        if (name && conversation.title !== name) {
+          conversation.title = name;
+          changed = true;
+        }
+      }
+      if (changed) void persistConversations();
+    };
+
+    const handleChatsUpdate = async (chats) => {
+      if (state.removed || !Array.isArray(chats) || !chats.length) return;
+      let changed = false;
+      for (const chat of chats) {
+        if (!chat?.id) continue;
+
+        if (typeof chat.name === "string" && chat.name.trim()) {
+           absorbContacts(sessionId, [{ id: chat.id, name: chat.name.trim() }]);
+        }
+
+        const conversation = ensureConversationMeta(stores, sessionId, chat.id);
+        const name = typeof chat.name === "string" ? chat.name.trim() : "";
+        if (name && conversation.title !== name) {
+          conversation.title = name;
+          changed = true;
+        }
+      }
+      if (changed) void persistConversations();
+    };
+
     const handlePhoneNumberShare = async (share) => {
       if (state.removed || !share?.lid || !share?.jid) {
         return;
@@ -1911,6 +1993,18 @@ function createSessionManager({
         });
         socket.ev.on("contacts.update", (contacts) => {
           void handleContactsUpdate(contacts);
+        });
+        socket.ev.on("groups.upsert", (groups) => {
+          void handleGroupsUpsert(groups);
+        });
+        socket.ev.on("groups.update", (groups) => {
+          void handleGroupsUpdate(groups);
+        });
+        socket.ev.on("chats.upsert", (chats) => {
+          void handleChatsUpsert(chats);
+        });
+        socket.ev.on("chats.update", (chats) => {
+          void handleChatsUpdate(chats);
         });
         socket.ev.on("chats.phoneNumberShare", (share) => {
           void handlePhoneNumberShare(share);
@@ -2153,7 +2247,13 @@ function createSessionManager({
             reuploadRequest: (staleMessage) => state.socket.updateMediaMessage(staleMessage),
           }
         : undefined;
-      const buffer = await downloadMediaMessage(waMessage, "buffer", {}, context);
+      let buffer;
+      try {
+        buffer = await downloadMediaMessage(waMessage, "buffer", {}, context);
+      } catch (err) {
+        app.log.error({ sessionId, error: err, messageId: message.id }, "Erro ao baixar media do WhatsApp.");
+        throw new Error("Falha ao processar downloadMediaMessage: " + err.message);
+      }
       const cachedMedia = await cacheMediaBuffer({
         buffer,
         config,
@@ -2358,7 +2458,11 @@ function createSessionManager({
 function listSessionConversations(sessionId, stores, { limit, search, kind }) {
   const bucket = ensureConversationBucket(stores.conversations, sessionId);
 
-  return Object.values(bucket)
+  // We use Object.values and then filter unique jids to prevent any duplicates just in case
+  const values = Object.values(bucket);
+  const uniqueConversations = Array.from(new Map(values.map(c => [c.jid, c])).values());
+
+  return uniqueConversations
     .map((conversation) => buildConversationSummary(sessionId, conversation, stores))
     .filter((conversation) => {
       if (kind === "private") {
@@ -2885,7 +2989,7 @@ function getConversationKind(jid = "") {
     return "newsletter";
   }
 
-  if (jid.endsWith("@broadcast")) {
+  if (jid.endsWith("@broadcast") || jid === "status@broadcast" || jid.includes("broadcast")) {
     return "broadcast";
   }
 
@@ -2894,7 +2998,8 @@ function getConversationKind(jid = "") {
 
 function resolveConversationIdentity(stores, sessionId, jid, fallbackTitle = "") {
   const kind = getConversationKind(jid);
-  const contact = kind === "private" ? getContactByAddress(stores.contacts, sessionId, jid) : null;
+  // We want to fetch contacts for all types to ensure we get group/newsletter names
+  const contact = getContactByAddress(stores.contacts, sessionId, jid);
   const resolvedJid = getPreferredContactAddress(contact, jid);
   const displayJid = formatJidForDisplay(resolvedJid);
   const genericFallback = formatJidForDisplay(jid);
@@ -2918,7 +3023,7 @@ function getPreferredContactName(contact) {
     return "";
   }
 
-  return String(contact.name || contact.notify || contact.verifiedName || "").trim();
+  return String(contact.name || contact.notify || contact.verifiedName || contact.subject || "").trim();
 }
 
 function getPreferredContactAddress(contact, fallbackJid) {
@@ -3277,6 +3382,10 @@ function encodeBinaryField(value) {
 function decodeBinaryField(value) {
   if (!value) {
     return undefined;
+  }
+
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    return value;
   }
 
   return Buffer.from(value, "base64");
