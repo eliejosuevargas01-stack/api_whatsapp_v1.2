@@ -1559,7 +1559,7 @@ function createSessionManager({
     const contactsChanged = absorbContacts(sessionId, event.contacts || []);
 
     for (const chat of event.chats || []) {
-      if (!chat?.id) {
+      if (!chat?.id || chat.id.endsWith('@newsletter')) {
         continue;
       }
 
@@ -1886,7 +1886,7 @@ function createSessionManager({
       if (state.removed || !Array.isArray(chats) || !chats.length) return;
       let changed = false;
       for (const chat of chats) {
-        if (!chat?.id) continue;
+        if (!chat?.id || chat.id.endsWith('@newsletter')) continue;
 
         if (typeof chat.name === "string" && chat.name.trim()) {
            absorbContacts(sessionId, [{ id: chat.id, name: chat.name.trim() }]);
@@ -1906,7 +1906,7 @@ function createSessionManager({
       if (state.removed || !Array.isArray(chats) || !chats.length) return;
       let changed = false;
       for (const chat of chats) {
-        if (!chat?.id) continue;
+        if (!chat?.id || chat.id.endsWith('@newsletter')) continue;
 
         if (typeof chat.name === "string" && chat.name.trim()) {
            absorbContacts(sessionId, [{ id: chat.id, name: chat.name.trim() }]);
@@ -2768,7 +2768,7 @@ async function normalizeIncomingMessage(sock, message) {
   let jid = message?.key?.remoteJid;
   let pushName = message?.pushName || 'Desconhecido';
 
-  if (!jid || !message?.message) {
+  if (!jid || !message?.message || jid.endsWith('@newsletter')) {
     return null;
   }
 
@@ -2788,10 +2788,10 @@ async function normalizeIncomingMessage(sock, message) {
     jid = parts[1] ? `${cleanUser}@${parts[1]}` : cleanUser;
   }
 
-  // To prevent breaking history indexing while allowing getConversationKind to function correctly elsewhere,
-  // we remove the suffix here for the core index. The `message.key.remoteJid` is already used by Baileys
-  // and we parse it properly for UI representation later.
-  jid = jid.split('@')[0].split(':')[0];
+  // We intentionally KEEP the suffix here. The entire system (contacts, chats.upsert, groups.upsert)
+  // expects the JID to be completely intact (e.g., number@s.whatsapp.net, id@g.us).
+  // Stripping it causes chat duplication and prevents contacts/names from matching up.
+  // We already stripped the device id suffix (e.g. :12) above, so jid is perfectly clean here.
 
   const content = unwrapMessageContent(message.message);
   const type = extractMessageType(content);
