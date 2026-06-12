@@ -1848,7 +1848,7 @@ function createSessionManager({
 
         // Push group to contacts to make sure getPreferredContactName can find it
         if (typeof group.subject === "string" && group.subject.trim()) {
-           absorbContacts(sessionId, [{ id: group.id, name: group.subject.trim() }]);
+           absorbContacts(sessionId, [{ id: group.id, subject: group.subject.trim(), name: group.subject.trim() }]);
         }
 
         const conversation = ensureConversationMeta(stores, sessionId, group.id);
@@ -1869,7 +1869,7 @@ function createSessionManager({
 
         // Push group to contacts to make sure getPreferredContactName can find it
         if (typeof group.subject === "string" && group.subject.trim()) {
-           absorbContacts(sessionId, [{ id: group.id, name: group.subject.trim() }]);
+           absorbContacts(sessionId, [{ id: group.id, subject: group.subject.trim(), name: group.subject.trim() }]);
         }
 
         const conversation = ensureConversationMeta(stores, sessionId, group.id);
@@ -2788,6 +2788,11 @@ async function normalizeIncomingMessage(sock, message) {
     jid = parts[1] ? `${cleanUser}@${parts[1]}` : cleanUser;
   }
 
+  // To prevent breaking history indexing while allowing getConversationKind to function correctly elsewhere,
+  // we remove the suffix here for the core index. The `message.key.remoteJid` is already used by Baileys
+  // and we parse it properly for UI representation later.
+  jid = jid.split('@')[0].split(':')[0];
+
   const content = unwrapMessageContent(message.message);
   const type = extractMessageType(content);
   const text = extractMessageText(content);
@@ -2981,7 +2986,9 @@ function getMessageSignature(message) {
 }
 
 function getConversationKind(jid = "") {
-  if (jid.endsWith("@g.us")) {
+  // If the jid doesn't contain an @ domain (because it was stripped earlier in normalizeIncomingMessage),
+  // we try to infer based on length, though most times groups have `-` and broadcasts usually are `status`.
+  if (jid.endsWith("@g.us") || jid.includes("-")) {
     return "group";
   }
 
@@ -2989,7 +2996,7 @@ function getConversationKind(jid = "") {
     return "newsletter";
   }
 
-  if (jid.endsWith("@broadcast") || jid === "status@broadcast" || jid.includes("broadcast")) {
+  if (jid.endsWith("@broadcast") || jid === "status@broadcast" || jid.includes("broadcast") || jid === "status") {
     return "broadcast";
   }
 
@@ -3694,6 +3701,7 @@ function normalizeContactEntry(entry) {
     name: String(entry?.name || "").trim() || null,
     notify: String(entry?.notify || "").trim() || null,
     verifiedName: String(entry?.verifiedName || "").trim() || null,
+    subject: String(entry?.subject || "").trim() || null,
     imgUrl:
       typeof entry?.imgUrl === "string"
         ? entry.imgUrl
