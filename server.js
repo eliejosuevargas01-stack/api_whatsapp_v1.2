@@ -2458,7 +2458,11 @@ function createSessionManager({
 function listSessionConversations(sessionId, stores, { limit, search, kind }) {
   const bucket = ensureConversationBucket(stores.conversations, sessionId);
 
-  return Object.values(bucket)
+  // We use Object.values and then filter unique jids to prevent any duplicates just in case
+  const values = Object.values(bucket);
+  const uniqueConversations = Array.from(new Map(values.map(c => [c.jid, c])).values());
+
+  return uniqueConversations
     .map((conversation) => buildConversationSummary(sessionId, conversation, stores))
     .filter((conversation) => {
       if (kind === "private") {
@@ -2777,6 +2781,7 @@ async function normalizeIncomingMessage(sock, message) {
   // Remove the device suffix locally. We avoid using sock.onWhatsApp here because
   // executing queries during history sync overloads the connection and triggers
   // WhatsApp's rate limit / connection close.
+  // We keep the domain suffix (@s.whatsapp.net, @g.us, etc) for conversation kind detection.
   if (jid.includes(':')) {
     const parts = jid.split('@');
     const cleanUser = parts[0].split(':')[0];
