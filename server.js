@@ -2011,6 +2011,10 @@ function createSessionManager({
     };
 
     const verifyNumberExists = async (jid) => {
+      if (jid.endsWith('@lid') || jid.endsWith('@g.us') || jid.endsWith('@broadcast')) {
+        return jid;
+      }
+
       const checkJid = async (targetJid) => {
         try {
           app.log.info({ sessionId, targetJid }, "Verificando se o numero existe no WhatsApp via onWhatsApp...");
@@ -2357,11 +2361,15 @@ function listSessionConversations(sessionId, stores, { limit, search, kind }) {
   return Object.values(bucket)
     .map((conversation) => buildConversationSummary(sessionId, conversation, stores))
     .filter((conversation) => {
-      if (kind === "private" && conversation.kind !== "private") {
-        return false;
+      if (kind === "private") {
+        if (conversation.kind !== "private" && conversation.kind !== "group") {
+          return false;
+        }
       }
-      if (kind === "status" && conversation.kind === "private") {
-        return false;
+      if (kind === "status") {
+        if (conversation.kind !== "newsletter" && conversation.kind !== "broadcast") {
+          return false;
+        }
       }
 
       if (!search) {
@@ -2660,21 +2668,21 @@ async function normalizeIncomingMessage(sock, message) {
     return null;
   }
 
-  if (jid.endsWith('@g.us') && message.key.participant) {
-    jid = message.key.participant;
-  }
+  // Mantém o jid como o ID do grupo para que a conversa não seja dividida,
+  // mas o participant continua sendo salvo mais abaixo em message.key.participant.
+  // if (jid.endsWith('@g.us') && message.key.participant) {
+  //   jid = message.key.participant;
+  // }
 
   // Remove the device suffix locally. We avoid using sock.onWhatsApp here because
   // executing queries during history sync overloads the connection and triggers
   // WhatsApp's rate limit / connection close.
+  // We keep the domain suffix (@s.whatsapp.net, @g.us, etc) for conversation kind detection.
   if (jid.includes(':')) {
     const parts = jid.split('@');
     const cleanUser = parts[0].split(':')[0];
     jid = parts[1] ? `${cleanUser}@${parts[1]}` : cleanUser;
   }
-
-  // Remove the suffix to have a clean number
-  jid = jid.split('@')[0].split(':')[0];
 
   const content = unwrapMessageContent(message.message);
   const type = extractMessageType(content);
