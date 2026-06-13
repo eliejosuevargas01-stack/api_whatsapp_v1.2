@@ -2174,9 +2174,13 @@ function createSessionManager({
       if (knownConvo) {
         const contact = getContactByAddress(stores.contacts, sessionId, knownConvo.jid);
         if (contact) {
-          return contact.jid || contact.lid || contact.id || jid;
+          return contact.lid || contact.jid || contact.id || jid;
         }
         if (!knownConvo.jid.includes("@")) {
+          const resolved = await checkJid(knownConvo.jid);
+          if (resolved) {
+            return resolved;
+          }
           return `${knownConvo.jid}@s.whatsapp.net`;
         }
         return knownConvo.jid;
@@ -2185,7 +2189,7 @@ function createSessionManager({
       const contactBucket = ensureContactBucket(stores.contacts, sessionId);
       const knownContact = contactBucket.records[jid] || contactBucket.records[cleanJid] || getContactByAddress(stores.contacts, sessionId, jid);
       if (knownContact) {
-        return knownContact.jid || knownContact.lid || knownContact.id || jid;
+        return knownContact.lid || knownContact.jid || knownContact.id || jid;
       }
 
       const checkJid = async (targetJid) => {
@@ -2195,8 +2199,20 @@ function createSessionManager({
           if (checkResult && checkResult.length > 0) {
             const [existsResult] = checkResult;
             if (existsResult && existsResult.exists) {
-              app.log.info({ sessionId, targetJid, resolvedJid: existsResult.jid }, "Numero verificado com sucesso no WhatsApp.");
-              return existsResult.jid;
+              const resolved = existsResult.lid || existsResult.jid;
+              app.log.info({ sessionId, targetJid, resolvedJid: resolved }, "Numero verificado com sucesso no WhatsApp.");
+              
+              const contactData = {
+                id: existsResult.jid,
+                jid: existsResult.jid,
+                lid: existsResult.lid
+              };
+              const changed = upsertContact(stores.contacts, sessionId, contactData);
+              if (changed) {
+                await persistContacts();
+              }
+              
+              return resolved;
             }
           }
           app.log.info({ sessionId, targetJid }, "Numero nao existe no WhatsApp.");
