@@ -2109,6 +2109,21 @@ function createSessionManager({
         return jid;
       }
 
+      // 1. Check if the JID is already known in our conversations or contacts store
+      // to avoid redundant network queries for already active contacts (which can fail/disconnect)
+      const cleanJid = jid.split('@')[0];
+      const conversationBucket = ensureConversationBucket(stores.conversations, sessionId);
+      const knownConvo = conversationBucket[jid] || conversationBucket[cleanJid];
+      if (knownConvo) {
+        return knownConvo.jid;
+      }
+
+      const contactBucket = ensureContactBucket(stores.contacts, sessionId);
+      const knownContact = contactBucket.records[jid] || contactBucket.records[cleanJid] || getContactByAddress(stores.contacts, sessionId, jid);
+      if (knownContact) {
+        return knownContact.jid || jid;
+      }
+
       const checkJid = async (targetJid) => {
         try {
           app.log.info({ sessionId, targetJid }, "Verificando se o numero existe no WhatsApp via onWhatsApp...");
