@@ -1261,6 +1261,63 @@ app.get("/api/sessions/:sessionId/check-number", async (request, reply) => {
   }
 });
 
+app.get("/api/sessions/:sessionId/resolve-lid", async (request, reply) => {
+  const { sessionId } = request.params;
+  let phone = String(request.query?.phone || request.query?.number || request.query?.jid || "").trim();
+
+  if (!sessionManager.hasSession(sessionId)) {
+    return reply.code(404).send({
+      error: "not_found",
+      message: "Sessao nao encontrada.",
+    });
+  }
+
+  if (!phone) {
+    return reply.code(400).send({
+      error: "bad_request",
+      message: "Informe o numero ou link no parametro phone, number ou jid.",
+    });
+  }
+
+  const summary = sessionManager.getSessionSummary(sessionId);
+  if (!summary || summary.snapshot?.status !== "connected") {
+    return reply.code(400).send({
+      error: "session_not_connected",
+      message: "A sessao do WhatsApp nao esta conectada.",
+    });
+  }
+
+  try {
+    if (phone.startsWith("http") || phone.includes("wa.me") || phone.includes("api.whatsapp.com") || phone.includes("web.whatsapp.com")) {
+      const extracted = await extractJidFromLink(phone);
+      if (extracted) {
+        phone = extracted;
+      } else {
+        return reply.code(400).send({ error: "bad_request", message: "Nao foi possivel extrair o numero do link fornecido." });
+      }
+    }
+
+    const result = await sessionManager.resolveLid(sessionId, phone);
+    if (result.exists) {
+      return {
+        exists: true,
+        jid: result.jid,
+        lid: result.lid
+      };
+    } else {
+      return reply.code(404).send({
+        exists: false,
+        message: result.message || "O numero informado nao esta registrado no WhatsApp."
+      });
+    }
+  } catch (error) {
+    return reply.code(500).send({
+      error: "internal_error",
+      message: error.message || "Erro ao resolver o LID."
+    });
+  }
+});
+
 app.get("/api/sessions/:sessionId/media", async (request, reply) => {
   const { sessionId } = request.params;
   const messageId = String(request.query?.messageId || "").trim();
@@ -2178,6 +2235,69 @@ function createSessionManager({
       }
     };
 
+    const resolveLid = async (phone) => {
+      if (!state.socket || state.status !== "connected") {
+        throw new Error("Sessao nao esta conectada.");
+      }
+
+      let rawJid = phone;
+      if (!phone.includes("@")) {
+        rawJid = normalizeJidInput(phone);
+      }
+
+      if (rawJid.endsWith('@lid')) {
+        return { exists: true, jid: rawJid, lid: rawJid };
+      }
+
+      const contactBucket = ensureContactBucket(stores.contacts, sessionId);
+      const knownContact = getContactByAddress(stores.contacts, sessionId, rawJid);
+      if (knownContact && knownContact.lid) {
+        app.log.info({ sessionId, phone, lid: knownContact.lid }, "LID resolvido a partir do cache local.");
+        return {
+          exists: true,
+          jid: knownContact.jid || rawJid,
+          lid: knownContact.lid
+        };
+      }
+
+      try {
+        app.log.info({ sessionId, rawJid }, "Resolvendo LID no WhatsApp via onWhatsApp...");
+        const checkResult = await state.socket.onWhatsApp(rawJid);
+        if (checkResult && checkResult.length > 0) {
+          const [existsResult] = checkResult;
+          if (existsResult && existsResult.exists && existsResult.lid) {
+            app.log.info({ sessionId, rawJid, lid: existsResult.lid }, "LID resolvido com sucesso via USync.");
+            
+            const contactData = {
+              id: existsResult.jid,
+              jid: existsResult.jid,
+              lid: existsResult.lid
+            };
+            
+            const changed = upsertContact(stores.contacts, sessionId, contactData);
+            if (changed) {
+              await persistContacts();
+            }
+
+            return {
+              exists: true,
+              jid: existsResult.jid,
+              lid: existsResult.lid
+            };
+          }
+        }
+
+        app.log.info({ sessionId, rawJid }, "Numero nao existe ou nao retornou LID no WhatsApp.");
+        return {
+          exists: false,
+          message: "O numero informado nao esta registrado no WhatsApp."
+        };
+      } catch (e) {
+        app.log.error({ sessionId, rawJid, error: e }, "Erro ao executar resolveLid via onWhatsApp.");
+        throw e;
+      }
+    };
+
     const sendText = async (jidInput, text) => {
       if (!state.socket || state.status !== "connected") {
         throw new Error("Sessao nao esta conectada.");
@@ -2344,6 +2464,7 @@ function createSessionManager({
       sendText,
       getSnapshot,
       verifyNumberExists,
+      resolveLid,
     };
   };
 
@@ -2464,6 +2585,7 @@ function createSessionManager({
     sendMedia: async (sessionId, jid, payload) => getService(sessionId).sendMedia(jid, payload),
     sendText: async (sessionId, jid, text) => getService(sessionId).sendText(jid, text),
     verifyNumberExists: async (sessionId, jid) => getService(sessionId).verifyNumberExists(jid),
+    resolveLid: async (sessionId, phone) => getService(sessionId).resolveLid(phone),
     autoConnectExistingSessions,
     disconnectAll,
     dispatchWebhookMessage,
