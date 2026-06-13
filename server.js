@@ -1103,7 +1103,7 @@ app.post("/api/sessions/:sessionId/sync-today", async (request, reply) => {
         }
 
         // Get incoming messages after the last outgoing message today
-        const targetMessages = todayMsgs.slice(lastOutgoingIdx + 1).filter(m => !m.fromMe);
+        const targetMessages = todayMsgs.slice(lastOutgoingIdx + 1).filter(m => !m.fromMe && m.type !== "unknown");
 
         for (const msg of targetMessages) {
           app.log.info(`[Sync-Today] Despachando webhook para mensagem recuperada do Instagram: ${msg.text}`);
@@ -1181,7 +1181,7 @@ app.post("/api/sessions/:sessionId/sync-today", async (request, reply) => {
         }
       }
 
-      const targetMessages = msgs.slice(lastOutgoingIdx + 1).filter(m => !m.fromMe);
+      const targetMessages = msgs.slice(lastOutgoingIdx + 1).filter(m => !m.fromMe && m.type !== "unknown");
 
       for (const msg of targetMessages) {
         app.log.info(`[Sync-Today] Despachando webhook para mensagem recuperada do WhatsApp: ${msg.text}`);
@@ -1454,7 +1454,7 @@ function createSessionManager({
       return false;
     }
 
-    const kind = getConversationKind(message?.jid || "");
+    const kind = message?.kind || getConversationKind(message?.jid || "");
 
     if (message?.fromMe && !webhook.includeFromMe) {
       return false;
@@ -2756,6 +2756,7 @@ function serializeMessageForClient(sessionId, message, stores) {
     participant: message.participant || null,
     participantDisplayJid: participantIdentity?.displayJid || null,
     media: serializeMediaForClient(sessionId, message),
+    kind: message.kind || getConversationKind(message.jid),
   };
 }
 
@@ -2796,7 +2797,7 @@ function upsertConversationFromMessage(stores, sessionId, record, options = {}) 
   const timestampMs = getMessageTimestampMs(record);
 
   conversation.title = conversation.title || record.pushName || formatJidForDisplay(record.jid);
-  conversation.kind = getConversationKind(record.jid);
+  conversation.kind = record.kind || conversation.kind || getConversationKind(record.jid);
   conversation.updatedAt = timestampMs;
   conversation.lastMessageAt = timestampMs;
   conversation.preview = getMessagePreview(record);
@@ -2932,6 +2933,8 @@ async function normalizeIncomingMessage(sock, message) {
     return null;
   }
 
+  const kind = getConversationKind(jid);
+
   // Mantém o jid como o ID do grupo para que a conversa não seja dividida,
   // mas o participant continua sendo salvo mais abaixo em message.key.participant.
   // if (jid.endsWith('@g.us') && message.key.participant) {
@@ -2959,8 +2962,9 @@ async function normalizeIncomingMessage(sock, message) {
   const media = extractMediaDescriptor(content);
 
   if (
-    ["senderKeyDistributionMessage", "messageContextInfo", "protocolMessage"].includes(type) &&
-    !text
+    (type === "unknown" || ["senderKeyDistributionMessage", "messageContextInfo", "protocolMessage"].includes(type)) &&
+    !text &&
+    !media
   ) {
     return null;
   }
@@ -2976,6 +2980,7 @@ async function normalizeIncomingMessage(sock, message) {
     pushName: pushName,
     participant: message.key.participant || null,
     media,
+    kind,
   };
 }
 
@@ -3748,6 +3753,7 @@ function normalizeMessagesStore(input, fallbackSessionId) {
       pushName: message.pushName || null,
       participant: message.participant || null,
       media: normalizeStoredMediaDescriptor(message.media),
+      kind: message.kind || getConversationKind(message.jid || ""),
     })),
   };
 }
@@ -3785,7 +3791,7 @@ function normalizeConversationEntry(entry, jid) {
   return {
     jid,
     title: entry?.title || formatJidForDisplay(jid),
-    kind: getConversationKind(jid),
+    kind: entry?.kind || getConversationKind(jid),
     updatedAt: Number(entry?.updatedAt || Date.now()),
     unreadCount: Number(entry?.unreadCount || 0),
     preview: entry?.preview || "",
