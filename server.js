@@ -2172,13 +2172,20 @@ function createSessionManager({
       const conversationBucket = ensureConversationBucket(stores.conversations, sessionId);
       const knownConvo = conversationBucket[jid] || conversationBucket[cleanJid];
       if (knownConvo) {
+        const contact = getContactByAddress(stores.contacts, sessionId, knownConvo.jid);
+        if (contact) {
+          return contact.jid || contact.lid || contact.id || jid;
+        }
+        if (!knownConvo.jid.includes("@")) {
+          return `${knownConvo.jid}@s.whatsapp.net`;
+        }
         return knownConvo.jid;
       }
 
       const contactBucket = ensureContactBucket(stores.contacts, sessionId);
       const knownContact = contactBucket.records[jid] || contactBucket.records[cleanJid] || getContactByAddress(stores.contacts, sessionId, jid);
       if (knownContact) {
-        return knownContact.jid || jid;
+        return knownContact.jid || knownContact.lid || knownContact.id || jid;
       }
 
       const checkJid = async (targetJid) => {
@@ -3175,11 +3182,19 @@ function getPreferredContactAddress(contact, fallbackJid) {
     return fallbackJid;
   }
 
-  const preferred = [contact.jid, contact.id, contact.lid]
+  const phoneJid = [contact.jid, contact.id, contact.lid]
     .map((value) => String(value || "").trim())
     .find((value) => value.includes("@") && !value.endsWith("@lid"));
 
-  return preferred || fallbackJid;
+  if (phoneJid) {
+    return phoneJid;
+  }
+
+  const lidJid = [contact.lid, contact.id, contact.jid]
+    .map((value) => String(value || "").trim())
+    .find((value) => value.includes("@") && value.endsWith("@lid"));
+
+  return lidJid || fallbackJid;
 }
 
 function formatJidForDisplay(jid = "") {
@@ -3890,7 +3905,13 @@ function upsertContact(store, sessionId, contact) {
 
 function getContactByAddress(contactStore, sessionId, address) {
   const bucket = ensureContactBucket(contactStore, sessionId);
-  const recordId = bucket.aliases[address] || null;
+  if (!address) return null;
+  const cleanAddress = address.split('@')[0].split(':')[0];
+  const recordId = bucket.aliases[address] || 
+                   bucket.aliases[`${cleanAddress}@s.whatsapp.net`] || 
+                   bucket.aliases[`${cleanAddress}@lid`] || 
+                   bucket.aliases[cleanAddress] || 
+                   null;
   return recordId ? bucket.records[recordId] || null : null;
 }
 
