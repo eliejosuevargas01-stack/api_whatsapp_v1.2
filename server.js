@@ -1318,6 +1318,113 @@ app.get("/api/sessions/:sessionId/resolve-lid", async (request, reply) => {
   }
 });
 
+app.get("/api/sessions/:sessionId/contact-info", async (request, reply) => {
+  const { sessionId } = request.params;
+  let phone = String(request.query?.phone || request.query?.number || request.query?.jid || "").trim();
+
+  if (!sessionManager.hasSession(sessionId)) {
+    return reply.code(404).send({
+      error: "not_found",
+      message: "Sessao nao encontrada.",
+    });
+  }
+
+  if (!phone) {
+    return reply.code(400).send({
+      error: "bad_request",
+      message: "Informe o numero ou link no parametro phone, number ou jid.",
+    });
+  }
+
+  const summary = sessionManager.getSessionSummary(sessionId);
+  if (!summary || summary.snapshot?.status !== "connected") {
+    return reply.code(400).send({
+      error: "session_not_connected",
+      message: "A sessao do WhatsApp nao esta conectada.",
+    });
+  }
+
+  try {
+    if (phone.startsWith("http") || phone.includes("wa.me") || phone.includes("api.whatsapp.com") || phone.includes("web.whatsapp.com")) {
+      const extracted = await extractJidFromLink(phone);
+      if (extracted) {
+        phone = extracted;
+      } else {
+        return reply.code(400).send({ error: "bad_request", message: "Nao foi possivel extrair o numero do link fornecido." });
+      }
+    }
+
+    const rawJid = normalizeJidInput(phone);
+    const resolved = await sessionManager.resolveLid(sessionId, rawJid);
+
+    if (!resolved.exists) {
+      return reply.code(404).send({
+        exists: false,
+        message: "O numero informado nao esta registrado no WhatsApp."
+      });
+    }
+
+    const targetJid = resolved.lid || resolved.jid;
+
+    const contact = getContactByAddress(stores.contacts, sessionId, targetJid);
+
+    const info = {
+      exists: true,
+      jid: resolved.jid,
+      lid: resolved.lid,
+      name: contact ? (contact.name || null) : null,
+      pushName: contact ? (contact.notify || contact.verifiedName || null) : null,
+      status: contact ? (contact.status || null) : null,
+      statusTimestamp: null,
+      profilePictureUrl: contact ? (contact.imgUrl || null) : null,
+      isBusiness: false,
+      businessProfile: null,
+    };
+
+    try {
+      const statusResult = await sessionManager.fetchStatus(sessionId, targetJid);
+      if (statusResult && statusResult.status) {
+        info.status = statusResult.status;
+        info.statusTimestamp = statusResult.setAt ? (statusResult.setAt instanceof Date ? statusResult.setAt.getTime() : statusResult.setAt) : null;
+      }
+    } catch (e) {
+      app.log.warn({ sessionId, targetJid, error: e }, "Erro ao obter status do contato via rede.");
+    }
+
+    try {
+      const ppUrl = await sessionManager.getProfilePictureUrl(sessionId, targetJid);
+      if (ppUrl) {
+        info.profilePictureUrl = ppUrl;
+      }
+    } catch (e) {
+      app.log.warn({ sessionId, targetJid, error: e }, "Erro ao obter foto de perfil do contato via rede.");
+    }
+
+    try {
+      const bizProfile = await sessionManager.getBusinessProfile(sessionId, targetJid);
+      if (bizProfile) {
+        info.isBusiness = true;
+        info.businessProfile = {
+          description: bizProfile.description || null,
+          category: bizProfile.category || null,
+          email: bizProfile.email || null,
+          website: bizProfile.website || null,
+          address: bizProfile.address || null,
+        };
+      }
+    } catch (e) {
+      app.log.debug({ sessionId, targetJid, error: e }, "Erro ao obter perfil comercial.");
+    }
+
+    return info;
+  } catch (error) {
+    return reply.code(500).send({
+      error: "internal_error",
+      message: error.message || "Erro ao obter informacoes do contato."
+    });
+  }
+});
+
 app.get("/api/sessions/:sessionId/media", async (request, reply) => {
   const { sessionId } = request.params;
   const messageId = String(request.query?.messageId || "").trim();
@@ -2321,6 +2428,36 @@ function createSessionManager({
       }
     };
 
+    const fetchStatus = async (jid) => {
+      if (!state.socket || state.status !== "connected") {
+        throw new Error("Sessao nao esta conectada.");
+      }
+      const list = await state.socket.fetchStatus(jid);
+      return list && list.length > 0 ? list[0] : null;
+    };
+
+    const getProfilePictureUrl = async (jid) => {
+      if (!state.socket || state.status !== "connected") {
+        throw new Error("Sessao nao esta conectada.");
+      }
+      try {
+        return await state.socket.profilePictureUrl(jid, 'image');
+      } catch (e) {
+        return null;
+      }
+    };
+
+    const getBusinessProfile = async (jid) => {
+      if (!state.socket || state.status !== "connected") {
+        throw new Error("Sessao nao esta conectada.");
+      }
+      try {
+        return await state.socket.getBusinessProfile(jid);
+      } catch (e) {
+        return null;
+      }
+    };
+
     const sendText = async (jidInput, text) => {
       if (!state.socket || state.status !== "connected") {
         throw new Error("Sessao nao esta conectada.");
@@ -2488,6 +2625,9 @@ function createSessionManager({
       getSnapshot,
       verifyNumberExists,
       resolveLid,
+      fetchStatus,
+      getProfilePictureUrl,
+      getBusinessProfile,
     };
   };
 
@@ -2609,6 +2749,9 @@ function createSessionManager({
     sendText: async (sessionId, jid, text) => getService(sessionId).sendText(jid, text),
     verifyNumberExists: async (sessionId, jid) => getService(sessionId).verifyNumberExists(jid),
     resolveLid: async (sessionId, phone) => getService(sessionId).resolveLid(phone),
+    fetchStatus: async (sessionId, jid) => getService(sessionId).fetchStatus(jid),
+    getProfilePictureUrl: async (sessionId, jid) => getService(sessionId).getProfilePictureUrl(jid),
+    getBusinessProfile: async (sessionId, jid) => getService(sessionId).getBusinessProfile(jid),
     autoConnectExistingSessions,
     disconnectAll,
     dispatchWebhookMessage,
