@@ -2885,10 +2885,19 @@ function serializeMessageForClient(sessionId, message, stores) {
     ? resolveConversationIdentity(stores, sessionId, message.participant)
     : null;
 
+  let resolvedLid = message.lid || null;
+  if (!resolvedLid) {
+    const contact = getContactByAddress(stores.contacts, sessionId, message.jid);
+    if (contact && contact.lid) {
+      resolvedLid = contact.lid;
+    }
+  }
+
   return {
     id: message.id,
     jid: message.jid,
     resolvedJid: identity.resolvedJid, // Retorna o telefone resolvido se for @lid
+    lid: resolvedLid,
     displayJid: identity.displayJid,
     fromMe: Boolean(message.fromMe),
     text: message.text || "",
@@ -3077,6 +3086,10 @@ async function normalizeIncomingMessage(sock, message) {
   }
 
   const kind = getConversationKind(jid);
+  let lid = null;
+  if (jid.endsWith('@lid')) {
+    lid = jid;
+  }
 
   // Mantém o jid como o ID do grupo para que a conversa não seja dividida,
   // mas o participant continua sendo salvo mais abaixo em message.key.participant.
@@ -3124,6 +3137,7 @@ async function normalizeIncomingMessage(sock, message) {
     participant: message.key.participant || null,
     media,
     kind,
+    lid,
   };
 }
 
@@ -3897,6 +3911,7 @@ function normalizeMessagesStore(input, fallbackSessionId) {
       participant: message.participant || null,
       media: normalizeStoredMediaDescriptor(message.media),
       kind: message.kind || getConversationKind(message.jid || ""),
+      lid: message.lid || null,
     })),
   };
 }
