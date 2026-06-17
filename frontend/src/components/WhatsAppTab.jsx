@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Search, Send, Paperclip, X, MessageSquare, Radio, HelpCircle, FileText, Image as ImageIcon, Check, CheckCheck, RefreshCw } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Search, Send, Paperclip, X, MessageSquare, FileText, Check, CheckCheck, RefreshCw } from 'lucide-react';
 import { apiRequest, formatDateTime, buildMediaUrl, fileToDataUrl, formatStatus } from '../shared/api';
 
 export default function WhatsAppTab({ sessions, selectedSessionId, setSelectedSessionId }) {
-  const [activeSubTab, setActiveSubTab] = useState('chats'); // 'chats' or 'status'
   const [search, setSearch] = useState('');
   const [conversations, setConversations] = useState([]);
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
@@ -12,7 +11,6 @@ export default function WhatsAppTab({ sessions, selectedSessionId, setSelectedSe
   const [selectedJid, setSelectedJid] = useState('');
   const [conversationDetail, setConversationDetail] = useState(null);
   const [messages, setMessages] = useState([]);
-  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [remoteHistoryExhausted, setRemoteHistoryExhausted] = useState(false);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
@@ -29,96 +27,18 @@ export default function WhatsAppTab({ sessions, selectedSessionId, setSelectedSe
   const fileInputRef = useRef(null);
   const autoRefreshTimerRef = useRef(null);
 
-  // Filter WhatsApp-only sessions
   const whatsappSessions = sessions.filter(s => s.platform !== 'instagram');
-  const selectedSession = whatsappSessions.find(s => s.id === selectedSessionId) || null;
 
-  // Sync session changes
-  useEffect(() => {
-    // If no session selected, select the first WhatsApp session if available
-    if (!selectedSessionId && whatsappSessions.length > 0) {
-      setSelectedSessionId(whatsappSessions[0].id);
-    }
-  }, [whatsappSessions, selectedSessionId, setSelectedSessionId]);
-
-  // Load conversations on session or sub-tab change
-  useEffect(() => {
-    setSelectedJid('');
-    setMessages([]);
-    setConversationDetail(null);
-    setNotice('');
-    if (selectedSessionId) {
-      loadConversations(true);
-    }
-  }, [selectedSessionId, activeSubTab]);
-
-  // Polling for new messages/conversations updates
-  useEffect(() => {
-    if (autoRefreshTimerRef.current) clearInterval(autoRefreshTimerRef.current);
-
-    autoRefreshTimerRef.current = setInterval(() => {
-      if (selectedSessionId) {
-        loadConversations(false);
+  function scrollToBottom() {
+    setTimeout(() => {
+      if (messageListRef.current) {
+        messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
       }
-    }, 8000);
+    }, 100);
+  }
 
-    return () => {
-      if (autoRefreshTimerRef.current) clearInterval(autoRefreshTimerRef.current);
-    };
-  }, [selectedSessionId, selectedJid, search]);
-
-  const loadConversations = async (showLoadingIndicator = false) => {
-    if (!selectedSessionId) return;
-    if (showLoadingIndicator) setIsLoadingConversations(true);
-
-    const params = new URLSearchParams();
-    params.set('limit', '300');
-    if (search.trim()) {
-      params.set('search', search.trim());
-    }
-
-    const pathSuffix = activeSubTab === 'status' ? 'status' : 'conversations';
-    const response = await apiRequest(`/api/sessions/${encodeURIComponent(selectedSessionId)}/${pathSuffix}?${params.toString()}`);
-    
-    setIsLoadingConversations(false);
-
-    if (response.ok) {
-      const list = response.data.conversations || [];
-      setConversations(list);
-      
-      // Update selected conversation in list if active
-      if (selectedJid) {
-        const activeItem = list.find(c => c.jid === selectedJid);
-        if (!activeItem) {
-          // If no longer exists in search, unselect
-          setSelectedJid('');
-          setConversationDetail(null);
-          setMessages([]);
-        } else {
-          // Poll new messages silently
-          fetchMessages(selectedJid, { silent: true, preserveScroll: true, markRead: true });
-        }
-      }
-    } else {
-      setNotice(response.error || 'Falha ao sincronizar conversas.');
-    }
-  };
-
-  const handleSearchChange = (e) => {
-    setSearch(e.target.value);
-    // Debounced load
-    const timeout = setTimeout(() => {
-      loadConversations(true);
-    }, 300);
-    return () => clearTimeout(timeout);
-  };
-
-  const fetchMessages = async (jid, options = {}) => {
+  async function fetchMessages(jid, options = {}) {
     if (!selectedSessionId || !jid) return;
-
-    if (!options.silent) {
-      setIsLoadingMessages(true);
-    }
 
     const params = new URLSearchParams();
     params.set('limit', options.limit || '100');
@@ -127,10 +47,6 @@ export default function WhatsAppTab({ sessions, selectedSessionId, setSelectedSe
     }
 
     const response = await apiRequest(`/api/sessions/${encodeURIComponent(selectedSessionId)}/conversations/${encodeURIComponent(jid)}/messages?${params.toString()}`);
-    
-    if (!options.silent) {
-      setIsLoadingMessages(false);
-    }
 
     if (response.ok) {
       const incoming = response.data.messages || [];
@@ -162,6 +78,51 @@ export default function WhatsAppTab({ sessions, selectedSessionId, setSelectedSe
         });
       }
     }
+  }
+
+  async function loadConversations(showLoadingIndicator = false) {
+    if (!selectedSessionId) return;
+    if (showLoadingIndicator) setIsLoadingConversations(true);
+
+    const params = new URLSearchParams();
+    params.set('limit', '300');
+    if (search.trim()) {
+      params.set('search', search.trim());
+    }
+
+    const response = await apiRequest(`/api/sessions/${encodeURIComponent(selectedSessionId)}/conversations?${params.toString()}`);
+    
+    setIsLoadingConversations(false);
+
+    if (response.ok) {
+      const list = response.data.conversations || [];
+      setConversations(list);
+      
+      // Update selected conversation in list if active
+      if (selectedJid) {
+        const activeItem = list.find(c => c.jid === selectedJid);
+        if (!activeItem) {
+          // If no longer exists in search, unselect
+          setSelectedJid('');
+          setConversationDetail(null);
+          setMessages([]);
+        } else {
+          // Poll new messages silently
+          fetchMessages(selectedJid, { silent: true, preserveScroll: true, markRead: true });
+        }
+      }
+    } else {
+      setNotice(response.error || 'Falha ao sincronizar conversas.');
+    }
+  }
+
+  const handleSearchChange = (e) => {
+    setSearch(e.target.value);
+    // Debounced load
+    const timeout = setTimeout(() => {
+      loadConversations(true);
+    }, 300);
+    return () => clearTimeout(timeout);
   };
 
   const selectConversation = async (jid) => {
@@ -171,13 +132,39 @@ export default function WhatsAppTab({ sessions, selectedSessionId, setSelectedSe
     await fetchMessages(jid, { stickToBottom: true, markRead: true });
   };
 
-  const scrollToBottom = () => {
-    setTimeout(() => {
-      if (messageListRef.current) {
-        messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
+  // Sync session changes
+  useEffect(() => {
+    // If no session selected, select the first WhatsApp session if available
+    if (!selectedSessionId && whatsappSessions.length > 0) {
+      setSelectedSessionId(whatsappSessions[0].id);
+    }
+  }, [whatsappSessions, selectedSessionId, setSelectedSessionId]);
+
+  // Load conversations on session change
+  useEffect(() => {
+    setSelectedJid('');
+    setMessages([]);
+    setConversationDetail(null);
+    setNotice('');
+    if (selectedSessionId) {
+      loadConversations(true);
+    }
+  }, [selectedSessionId]);
+
+  // Polling for new messages/conversations updates
+  useEffect(() => {
+    if (autoRefreshTimerRef.current) clearInterval(autoRefreshTimerRef.current);
+
+    autoRefreshTimerRef.current = setInterval(() => {
+      if (selectedSessionId) {
+        loadConversations(false);
       }
-    }, 100);
-  };
+    }, 8000);
+
+    return () => {
+      if (autoRefreshTimerRef.current) clearInterval(autoRefreshTimerRef.current);
+    };
+  }, [selectedSessionId, selectedJid, search]);
 
   const handleScroll = async () => {
     if (!messageListRef.current || isLoadingOlder || (!hasOlderMessages && remoteHistoryExhausted)) return;
@@ -350,20 +337,7 @@ export default function WhatsAppTab({ sessions, selectedSessionId, setSelectedSe
           </select>
         </div>
 
-        <div className="chat-sub-tabs">
-          <button 
-            className={`sub-tab-btn ${activeSubTab === 'chats' ? 'active' : ''}`}
-            onClick={() => setActiveSubTab('chats')}
-          >
-            <MessageSquare size={16} /> Conversas
-          </button>
-          <button 
-            className={`sub-tab-btn ${activeSubTab === 'status' ? 'active' : ''}`}
-            onClick={() => setActiveSubTab('status')}
-          >
-            <Radio size={16} /> Status & Canais
-          </button>
-        </div>
+
 
         <div className="search-bar">
           <Search size={16} className="search-icon" />
