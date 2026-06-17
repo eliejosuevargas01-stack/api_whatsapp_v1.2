@@ -2868,7 +2868,7 @@ function buildConversationSummary(sessionId, conversation, stores) {
     jid: conversation.jid,
     displayJid: identity.displayJid,
     title: identity.title,
-    kind: getConversationKind(conversation.jid),
+    kind: conversation.kind || getConversationKind(conversation.jid),
     updatedAt: Number(conversation.updatedAt || Date.now()),
     unreadCount: Number(conversation.unreadCount || 0),
     preview: conversation.preview || "",
