@@ -14,8 +14,10 @@ export function savePanelState(partialState) {
 }
 
 export async function apiRequest(path, options = {}) {
+  const token = localStorage.getItem("whatsapp_session_token");
   const headers = {
     ...(options.body ? { "Content-Type": "application/json" } : {}),
+    ...(token ? { "x-session-token": token } : {}),
     ...(options.headers || {}),
   };
 
@@ -24,6 +26,11 @@ export async function apiRequest(path, options = {}) {
       ...options,
       headers,
     });
+
+    if (response.status === 401 && path !== "/api/auth/login") {
+      localStorage.removeItem("whatsapp_session_token");
+      window.dispatchEvent(new CustomEvent("auth-unauthorized"));
+    }
 
     const contentType = response.headers.get("content-type") || "";
     const data = contentType.includes("application/json")

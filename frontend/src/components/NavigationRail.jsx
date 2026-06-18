@@ -1,5 +1,5 @@
 import React from 'react';
-import { MessageSquare, Settings, Sun, Moon } from 'lucide-react';
+import { MessageSquare, Settings, Sun, Moon, LogOut } from 'lucide-react';
 
 const Instagram = ({ size = 24, ...props }) => (
   <svg
@@ -21,7 +21,7 @@ const Instagram = ({ size = 24, ...props }) => (
 );
 
 
-export default function NavigationRail({ activeTab, setActiveTab, theme, onToggleTheme }) {
+export default function NavigationRail({ activeTab, setActiveTab, theme, onToggleTheme, onLogout }) {
   const tabs = [
     { id: 'whatsapp', name: 'WhatsApp', icon: MessageSquare },
     { id: 'instagram', name: 'Instagram', icon: Instagram },
@@ -56,8 +56,18 @@ export default function NavigationRail({ activeTab, setActiveTab, theme, onToggl
           className="nav-btn theme-toggle"
           onClick={onToggleTheme}
           title={theme === 'dark' ? 'Modo Claro' : 'Modo Escuro'}
+          style={{ marginBottom: '10px' }}
         >
           {theme === 'dark' ? <Sun size={22} /> : <Moon size={22} />}
+        </button>
+
+        <button
+          className="nav-btn logout-btn"
+          onClick={onLogout}
+          title="Sair"
+          style={{ color: 'var(--color-error)' }}
+        >
+          <LogOut size={22} />
         </button>
       </div>
     </div>

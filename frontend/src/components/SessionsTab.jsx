@@ -9,6 +9,14 @@ export default function SessionsTab({ sessions, onRefreshSessions, selectedSessi
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [sessionNote, setSessionNote] = useState('');
   
+  // CRM Integration state
+  const [recipient, setRecipient] = useState('');
+  const [token, setToken] = useState('');
+  const [crmRecipient, setCrmRecipient] = useState('');
+  const [crmToken, setCrmToken] = useState('');
+  const [isSavingCrmSettings, setIsSavingCrmSettings] = useState(false);
+  const [crmNote, setCrmNote] = useState('');
+
   // Webhook settings state
   const [webhookEnabled, setWebhookEnabled] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState('');
@@ -27,10 +35,19 @@ export default function SessionsTab({ sessions, onRefreshSessions, selectedSessi
   useEffect(() => {
     if (selectedSessionId) {
       loadSettings(selectedSessionId);
+      const currentSession = sessions.find(s => s.id === selectedSessionId);
+      if (currentSession) {
+        setCrmRecipient(currentSession.recipient || '');
+        setCrmToken(currentSession.token || '');
+        setCrmNote('');
+      }
     } else {
       resetSettingsForm();
+      setCrmRecipient('');
+      setCrmToken('');
+      setCrmNote('');
     }
-  }, [selectedSessionId]);
+  }, [selectedSessionId, sessions]);
 
   const loadSettings = async (sessionId) => {
     setSettingsNote('Carregando configurações...');
@@ -113,7 +130,11 @@ export default function SessionsTab({ sessions, onRefreshSessions, selectedSessi
     } else {
       const response = await apiRequest('/api/sessions', {
         method: 'POST',
-        body: JSON.stringify({ name: cleanName })
+        body: JSON.stringify({
+          name: cleanName,
+          recipient: recipient.trim() || null,
+          token: token.trim() || null
+        })
       });
 
       setIsSubmitting(false);
@@ -124,6 +145,8 @@ export default function SessionsTab({ sessions, onRefreshSessions, selectedSessi
       }
 
       setName('');
+      setRecipient('');
+      setToken('');
       setSessionNote('Sessão criada. Clique em conectar para gerar o QR.');
       setSelectedSessionId(response.data.session.id);
       onRefreshSessions();
@@ -165,6 +188,34 @@ export default function SessionsTab({ sessions, onRefreshSessions, selectedSessi
       }, 2000);
     } else {
       setSettingsNote(response.error || 'Erro ao salvar as configurações.');
+    }
+  };
+
+  const handleSaveCrmSettings = async (e) => {
+    e.preventDefault();
+    if (!selectedSessionId) return;
+
+    setIsSavingCrmSettings(true);
+    setCrmNote('Salvando configurações CRM...');
+
+    const response = await apiRequest(`/api/sessions/${encodeURIComponent(selectedSessionId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        recipient: crmRecipient.trim() || null,
+        token: crmToken.trim() || null
+      })
+    });
+
+    setIsSavingCrmSettings(false);
+
+    if (response.ok) {
+      setCrmNote('Configurações CRM salvas com sucesso.');
+      onRefreshSessions();
+      setTimeout(() => {
+        setCrmNote('');
+      }, 3000);
+    } else {
+      setCrmNote(response.error || 'Erro ao salvar as configurações CRM.');
     }
   };
 
@@ -273,7 +324,31 @@ export default function SessionsTab({ sessions, onRefreshSessions, selectedSessi
               />
             </div>
           )}
+          {platform === 'whatsapp' && (
+            <>
+              <div className="form-group">
+                <label className="form-label">Destinatário CRM (Opcional)</label>
+                <input
+                  type="text"
+                  className="input-field"
+                  value={recipient}
+                  onChange={(e) => setRecipient(e.target.value)}
+                  placeholder="Ex: usuario_crm_123"
+                />
+              </div>
 
+              <div className="form-group">
+                <label className="form-label">Token CRM (Opcional)</label>
+                <input
+                  type="text"
+                  className="input-field"
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  placeholder="Ex: 123sksdisn..."
+                />
+              </div>
+            </>
+          )}
           <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={isSubmitting}>
             <Plus size={16} />
             {isSubmitting ? 'Processando...' : 'Adicionar Conta'}
@@ -344,6 +419,20 @@ export default function SessionsTab({ sessions, onRefreshSessions, selectedSessi
                 <span className="divider">|</span>
                 <span>Plataforma:</span>
                 <span className="platform-tag">{selectedSession.platform || 'whatsapp'}</span>
+                {selectedSession.recipient && (
+                  <>
+                    <span className="divider">|</span>
+                    <span>Destinatário CRM:</span>
+                    <span className="platform-tag" style={{ backgroundColor: '#2563eb', color: 'white' }}>{selectedSession.recipient}</span>
+                  </>
+                )}
+                {selectedSession.token && (
+                  <>
+                    <span className="divider">|</span>
+                    <span>Token:</span>
+                    <span className="platform-tag" style={{ backgroundColor: '#475569', color: 'white' }} title={selectedSession.token}>✓ Configurado</span>
+                  </>
+                )}
               </div>
               
               {sessionNote && <div className="session-info-note">{sessionNote}</div>}
@@ -514,6 +603,40 @@ export default function SessionsTab({ sessions, onRefreshSessions, selectedSessi
                   </button>
                 </form>
                 {settingsNote && <div className="settings-info-note">{settingsNote}</div>}
+              </div>
+
+              {/* CRM configuration card */}
+              <div className="detail-card crm-card glass-panel">
+                <h3>Integração CRM (DominusLabs)</h3>
+                <form onSubmit={handleSaveCrmSettings}>
+                  <div className="form-group">
+                    <label className="form-label">Destinatário (Identificador de Usuário)</label>
+                    <input 
+                      type="text" 
+                      className="input-field"
+                      value={crmRecipient}
+                      onChange={(e) => setCrmRecipient(e.target.value)}
+                      placeholder="Ex: usuario_crm_123"
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Token de Autenticação</label>
+                    <input 
+                      type="text" 
+                      className="input-field"
+                      value={crmToken}
+                      onChange={(e) => setCrmToken(e.target.value)}
+                      placeholder="Ex: 123sksdisn..."
+                    />
+                  </div>
+
+                  <button type="submit" className="btn btn-primary btn-sm" disabled={isSavingCrmSettings} style={{ marginTop: '12px' }}>
+                    <Save size={14} />
+                    {isSavingCrmSettings ? 'Salvando...' : 'Salvar Alterações CRM'}
+                  </button>
+                </form>
+                {crmNote && <div className="settings-info-note">{crmNote}</div>}
               </div>
             </div>
           </div>

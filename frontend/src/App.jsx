@@ -3,6 +3,7 @@ import NavigationRail from './components/NavigationRail';
 import WhatsAppTab from './components/WhatsAppTab';
 import InstagramTab from './components/InstagramTab';
 import SessionsTab from './components/SessionsTab';
+import LoginView from './components/LoginView';
 import { apiRequest, loadPanelState, savePanelState } from './shared/api';
 
 export default function App() {
@@ -10,6 +11,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('whatsapp');
   const [sessions, setSessions] = useState([]);
   const [selectedSessionId, setSelectedSessionId] = useState('');
+  const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('whatsapp_session_token'));
 
   // Initialize theme and tab from localStorage
   useEffect(() => {
@@ -29,16 +31,30 @@ export default function App() {
       document.body.classList.remove('light-theme');
     }
 
-    refreshSessions();
-  }, []);
+    if (isAuthenticated) {
+      refreshSessions();
+    }
+  }, [isAuthenticated]);
 
   // Poll sessions list
   useEffect(() => {
+    if (!isAuthenticated) return;
+
     const timer = setInterval(() => {
       refreshSessions();
     }, 8000);
 
     return () => clearInterval(timer);
+  }, [isAuthenticated]);
+
+  // Listen for unauthorized events (automatic logout)
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      setIsAuthenticated(false);
+    };
+
+    window.addEventListener('auth-unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('auth-unauthorized', handleUnauthorized);
   }, []);
 
   // Sync active tab selection to localStorage
@@ -71,6 +87,15 @@ export default function App() {
     savePanelState({ selectedSessionId: id });
   };
 
+  const handleLogout = () => {
+    localStorage.removeItem('whatsapp_session_token');
+    setIsAuthenticated(false);
+  };
+
+  if (!isAuthenticated) {
+    return <LoginView onLoginSuccess={() => setIsAuthenticated(true)} />;
+  }
+
   return (
     <div className="app-container">
       <NavigationRail
@@ -78,6 +103,7 @@ export default function App() {
         setActiveTab={handleSelectTab}
         theme={theme}
         onToggleTheme={handleToggleTheme}
+        onLogout={handleLogout}
       />
       
       <main className="main-content">

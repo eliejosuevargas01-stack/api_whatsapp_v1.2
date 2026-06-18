@@ -68,6 +68,8 @@ const config = {
   sessionsDir: path.resolve(process.env.SESSIONS_DIR || path.join(__dirname, "sessions")),
   dataDir: path.resolve(process.env.DATA_DIR || path.join(__dirname, "data")),
   mediaDir: path.resolve(process.env.MEDIA_DIR || path.join(__dirname, "data", "media")),
+  masterApiKey: process.env.API_KEY || process.env.MASTER_API_KEY || null,
+  crmApiUrl: process.env.CRM_API_URL || "http://localhost:8000",
 };
 
 function getDefaultSettingsStore() {
@@ -171,6 +173,39 @@ const sessionManager = createSessionManager({
   persistContacts,
 });
 
+function getRequestToken(request) {
+  let token = request.headers["x-session-token"] || request.query?.token;
+  if (!token && request.headers.authorization) {
+    const parts = request.headers.authorization.split(" ");
+    if (parts.length === 2 && parts[0].toLowerCase() === "bearer") {
+      token = parts[1];
+    }
+  }
+  return token ? String(token).trim() : null;
+}
+
+app.addHook("preHandler", async (request, reply) => {
+  const { sessionId, username } = request.params || {};
+  const targetSessionId = sessionId || username || request.body?.sessionId || request.body?.username;
+
+  if (targetSessionId) {
+    const session = stores.sessions.sessions[targetSessionId];
+    if (session && session.token) {
+      const reqToken = getRequestToken(request);
+      if (config.masterApiKey && reqToken === config.masterApiKey) {
+        return;
+      }
+      if (session.token !== reqToken) {
+        reply.code(401).send({
+          error: "unauthorized",
+          message: "Token de sessao invalido ou ausente.",
+        });
+        return reply;
+      }
+    }
+  }
+});
+
 app.register(rateLimit, {
   max: config.rateLimitMax,
   timeWindow: config.rateLimitWindow,
@@ -203,6 +238,78 @@ app.get("/api/health", async () => ({
 app.get("/api/bootstrap", async () => ({
   appName: "API WhatsApp",
 }));
+
+app.post("/api/auth/login", async (request, reply) => {
+  const { username, password } = request.body || {};
+  if (!username || !password) {
+    return reply.code(400).send({
+      error: "bad_request",
+      message: "Por favor, informe e-mail e senha.",
+    });
+  }
+
+  try {
+    const response = await fetch(`${config.crmApiUrl}/api/v1/auth/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ username, password }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      return reply.code(response.status).send({
+        error: data.error || "login_failed",
+        message: data.detail || data.message || "E-mail ou senha incorretos.",
+      });
+    }
+
+    return data;
+  } catch (error) {
+    app.log.error(error, "Erro ao conectar com a API de Autenticação do CRM");
+    return reply.code(500).send({
+      error: "connection_error",
+      message: "Não foi possível conectar ao servidor de autenticação central do CRM.",
+    });
+  }
+});
+
+app.post("/api/auth/refresh", async (request, reply) => {
+  const { refresh_token } = request.body || {};
+  if (!refresh_token) {
+    return reply.code(400).send({
+      error: "bad_request",
+      message: "Token de atualização não informado.",
+    });
+  }
+
+  try {
+    const response = await fetch(`${config.crmApiUrl}/api/v1/auth/refresh`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ refresh_token }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      return reply.code(response.status).send({
+        error: data.error || "refresh_failed",
+        message: data.detail || data.message || "Token de atualização inválido ou expirado.",
+      });
+    }
+
+    return data;
+  } catch (error) {
+    app.log.error(error, "Erro ao conectar com a API de Refresh do CRM");
+    return reply.code(500).send({
+      error: "connection_error",
+      message: "Não foi possível conectar ao servidor de autenticação central do CRM.",
+    });
+  }
+});
 
 app.get("/api/status", async () => ({
   sessionCount: Object.keys(stores.sessions.sessions).length,
@@ -328,7 +435,10 @@ app.put("/api/sessions/:sessionId/settings", async (request, reply) => {
   }
 });
 
-app.get("/api/sessions", async () => {
+app.get("/api/sessions", async (request, reply) => {
+  const reqToken = getRequestToken(request);
+  const recipient = request.query?.recipient ? String(request.query.recipient).trim() : null;
+
   const whatsappSessions = sessionManager.listSessions();
   let instagramSessions = [];
   try {
@@ -336,26 +446,66 @@ app.get("/api/sessions", async () => {
   } catch (error) {
     app.log.error(error, "Falha ao obter lista de sessoes do Instagram.");
   }
+
+  let allSessions = [
+    ...whatsappSessions.map((s) => ({ ...s, platform: "whatsapp" })),
+    ...instagramSessions.map((s) => ({
+      id: s.id,
+      name: s.name,
+      platform: "instagram",
+      snapshot: { status: s.active ? "connected" : "disconnected" },
+      stats: {
+        conversationCount: 0,
+        messageCount: 0,
+        unreadCount: 0,
+      },
+    })),
+  ];
+
+  const isMaster = config.masterApiKey && reqToken === config.masterApiKey;
+
+  if (isMaster) {
+    if (recipient) {
+      allSessions = allSessions.filter(s => {
+        const meta = stores.sessions.sessions[s.id];
+        return meta && meta.recipient === recipient;
+      });
+    }
+  } else if (reqToken) {
+    allSessions = allSessions.filter(s => {
+      const meta = stores.sessions.sessions[s.id];
+      return meta && meta.token === reqToken;
+    });
+
+    if (recipient) {
+      allSessions = allSessions.filter(s => {
+        const meta = stores.sessions.sessions[s.id];
+        return meta && meta.recipient === recipient;
+      });
+    }
+  } else {
+    allSessions = allSessions.filter(s => {
+      const meta = stores.sessions.sessions[s.id];
+      return !meta || !meta.token;
+    });
+
+    if (recipient) {
+      allSessions = allSessions.filter(s => {
+        const meta = stores.sessions.sessions[s.id];
+        return meta && meta.recipient === recipient;
+      });
+    }
+  }
+
   return {
-    sessions: [
-      ...whatsappSessions.map((s) => ({ ...s, platform: "whatsapp" })),
-      ...instagramSessions.map((s) => ({
-        id: s.id,
-        name: s.name,
-        platform: "instagram",
-        snapshot: { status: s.active ? "connected" : "disconnected" },
-        stats: {
-          conversationCount: 0,
-          messageCount: 0,
-          unreadCount: 0,
-        },
-      })),
-    ],
+    sessions: allSessions,
   };
 });
 
 app.post("/api/sessions", async (request, reply) => {
   const name = String(request.body?.name || "").trim();
+  const recipient = request.body?.recipient ? String(request.body.recipient).trim() : null;
+  const token = request.body?.authToken || request.body?.token ? String(request.body.authToken || request.body.token).trim() : null;
 
   if (!name) {
     return reply.code(400).send({
@@ -364,7 +514,7 @@ app.post("/api/sessions", async (request, reply) => {
     });
   }
 
-  const session = await sessionManager.createSession(name);
+  const session = await sessionManager.createSession(name, recipient, token);
   return {
     ok: true,
     session,
@@ -386,6 +536,44 @@ app.get("/api/sessions/:sessionId", async (request, reply) => {
   };
 });
 
+app.put("/api/sessions/:sessionId", async (request, reply) => {
+  const { sessionId } = request.params;
+
+  if (!sessionManager.hasSession(sessionId)) {
+    return reply.code(404).send({
+      error: "not_found",
+      message: "Sessao nao encontrada.",
+    });
+  }
+
+  try {
+    const session = ensureSessionMeta(stores.sessions, sessionId);
+    if (request.body?.name !== undefined) {
+      session.name = String(request.body.name || "").trim() || session.name;
+    }
+    if (request.body?.recipient !== undefined) {
+      session.recipient = request.body.recipient ? String(request.body.recipient).trim() : null;
+    }
+    if (request.body?.authToken !== undefined) {
+      session.token = request.body.authToken ? String(request.body.authToken).trim() : null;
+    } else if (request.body?.token !== undefined) {
+      session.token = request.body.token ? String(request.body.token).trim() : null;
+    }
+    session.updatedAt = Date.now();
+    await persistSessions();
+
+    return {
+      ok: true,
+      session: sessionManager.getSessionSummary(sessionId),
+    };
+  } catch (error) {
+    return reply.code(400).send({
+      error: "bad_request",
+      message: errorToMessage(error) || "Nao foi possivel editar a sessao.",
+    });
+  }
+});
+
 app.post("/api/sessions/:sessionId/connect", async (request, reply) => {
   if (!sessionManager.hasSession(request.params.sessionId)) {
     return reply.code(404).send({
@@ -394,7 +582,21 @@ app.post("/api/sessions/:sessionId/connect", async (request, reply) => {
     });
   }
 
-  const snapshot = await sessionManager.connect(request.params.sessionId);
+  let snapshot = await sessionManager.connect(request.params.sessionId);
+
+  if (snapshot.status === "connecting" || snapshot.status === "qr") {
+    let attempts = 0;
+    while (attempts < 15) {
+      const currentSnapshot = sessionManager.getSessionSummary(request.params.sessionId)?.snapshot;
+      if (currentSnapshot?.qrDataUrl) {
+        snapshot = currentSnapshot;
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 200));
+      attempts++;
+    }
+  }
+
   return {
     ok: true,
     snapshot,
@@ -819,6 +1021,7 @@ async function pollInstagramSessions() {
 app.post("/api/instagram/login", async (request, reply) => {
   const username = request.body?.username;
   const password = request.body?.password;
+  const token = request.body?.authToken || request.body?.token ? String(request.body.authToken || request.body.token).trim() : null;
 
   if (!username || !password) {
     return reply.code(400).send({ error: "bad_request", message: "Informe username e password." });
@@ -826,6 +1029,10 @@ app.post("/api/instagram/login", async (request, reply) => {
 
   try {
     const session = await loginInstagram(username, password);
+    if (token) {
+      ensureSessionMeta(stores.sessions, username, { token });
+      await persistSessions();
+    }
     return { ok: true, session };
   } catch (error) {
     return reply.code(400).send({ error: "login_failed", message: error.message, isCheckpoint: error.isCheckpoint });
@@ -868,7 +1075,24 @@ app.post("/api/instagram/send", async (request, reply) => {
 app.get("/api/instagram/sessions", async (request, reply) => {
   try {
     const sessions = await getInstagramSessionsList();
-    return { sessions };
+    const reqToken = getRequestToken(request);
+    
+    let filteredSessions = sessions;
+    if (config.masterApiKey && reqToken === config.masterApiKey) {
+      // Master can see all
+    } else if (reqToken) {
+      filteredSessions = sessions.filter(s => {
+        const meta = stores.sessions.sessions[s.id];
+        return meta && meta.token === reqToken;
+      });
+    } else {
+      filteredSessions = sessions.filter(s => {
+        const meta = stores.sessions.sessions[s.id];
+        return !meta || !meta.token;
+      });
+    }
+    
+    return { sessions: filteredSessions };
   } catch (error) {
     return reply.code(500).send({ error: "server_error", message: error.message });
   }
@@ -2648,6 +2872,8 @@ function createSessionManager({
     return {
       id: meta.id,
       name: meta.name,
+      recipient: meta.recipient || null,
+      token: meta.token || null,
       createdAt: meta.createdAt,
       updatedAt: meta.updatedAt,
       snapshot: getService(sessionId).getSnapshot(),
@@ -2661,12 +2887,14 @@ function createSessionManager({
       .map((session) => getSessionSummary(session.id))
       .filter(Boolean);
 
-  const createSession = async (name) => {
+  const createSession = async (name, recipient = null, token = null) => {
     const sessionId = generateSessionId(name, stores.sessions);
     const session = ensureSessionMeta(stores.sessions, sessionId, {
       name: String(name).trim(),
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      recipient: recipient ? String(recipient).trim() : null,
+      token: token ? String(token).trim() : null,
     });
     session.webhook = cloneWebhookSettings(stores.settings.webhook);
     ensureConversationBucket(stores.conversations, sessionId);
@@ -3972,6 +4200,8 @@ function normalizeSessionStore(input) {
       createdAt: Number(session?.createdAt || Date.now()),
       updatedAt: Number(session?.updatedAt || Date.now()),
       webhook: normalizeWebhookSettings(session?.webhook || {}),
+      recipient: session?.recipient || null,
+      token: session?.token || null,
     };
   }
 
@@ -4191,6 +4421,8 @@ function ensureSessionMeta(store, sessionId, patch = {}) {
       name: patch.name || formatSessionName(sessionId),
       createdAt: Number(patch.createdAt || Date.now()),
       updatedAt: Number(patch.updatedAt || Date.now()),
+      recipient: patch.recipient || null,
+      token: patch.token || null,
     };
   } else {
     store.sessions[sessionId] = {
