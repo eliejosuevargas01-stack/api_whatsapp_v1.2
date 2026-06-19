@@ -10,8 +10,12 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 COPY server.js ./
+COPY db.js ./
+COPY jwt.js ./
 COPY instagramManager.js ./
 COPY public ./public
+COPY migrations ./migrations
+COPY scripts ./scripts
 
 RUN mkdir -p /app/data /app/sessions
 
