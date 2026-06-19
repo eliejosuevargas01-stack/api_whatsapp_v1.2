@@ -73,9 +73,21 @@ const config = {
   mediaDir: path.resolve(process.env.MEDIA_DIR || path.join(__dirname, "data", "media")),
   masterApiKey: process.env.API_KEY || process.env.MASTER_API_KEY || null,
   crmApiUrl: process.env.CRM_API_URL || "http://localhost:8000",
-  adminUsername: process.env.ADMIN_USERNAME || "Eliejosuevargas01",
-  adminPassword: process.env.ADMIN_PASSWORD || "280108",
-  jwtSecret: process.env.JWT_SECRET || "dominuslabs-super-secret-key-2026",
+  adminUsername: (() => {
+    const v = process.env.ADMIN_USERNAME;
+    if (!v) throw new Error("[CONFIG] ADMIN_USERNAME não definido no .env — servidor abortado.");
+    return v;
+  })(),
+  adminPassword: (() => {
+    const v = process.env.ADMIN_PASSWORD;
+    if (!v) throw new Error("[CONFIG] ADMIN_PASSWORD não definido no .env — servidor abortado.");
+    return v;
+  })(),
+  jwtSecret: (() => {
+    const v = process.env.JWT_SECRET;
+    if (!v) throw new Error("[CONFIG] JWT_SECRET não definido no .env — servidor abortado.");
+    return v;
+  })(),
 };
 
 function getDefaultSettingsStore() {
@@ -240,6 +252,16 @@ function isAdminToken(token) {
   if (token === config.adminUsername || token === "admin") {
     return true;
   }
+  try {
+    const decoded = verifyM2MToken(token);
+    if (decoded) {
+      if (decoded.role === "admin") return true;
+      if (decoded.username === config.adminUsername || decoded.email === config.adminUsername) return true;
+      if (decoded.sub && (decoded.sub === "admin" || decoded.sub === config.adminUsername)) return true;
+    }
+  } catch (e) {
+    // ignore and try legacy
+  }
   const decoded = verifyJwt(token, config.jwtSecret);
   if (decoded) {
     if (decoded.role === "admin") return true;
@@ -248,6 +270,65 @@ function isAdminToken(token) {
   }
   return false;
 }
+
+function getUserPrefix(tokenOrPayload) {
+  if (!tokenOrPayload) return "anon";
+  
+  let payload = null;
+  if (typeof tokenOrPayload === "string") {
+    if (tokenOrPayload === config.masterApiKey || tokenOrPayload === config.adminUsername || tokenOrPayload === "admin") {
+      return "admin";
+    }
+    try {
+      payload = verifyM2MToken(tokenOrPayload);
+    } catch (e) {
+      try {
+        payload = verifyJwt(tokenOrPayload, config.jwtSecret);
+      } catch (err) {
+        // ignore
+      }
+    }
+  } else {
+    payload = tokenOrPayload;
+  }
+
+  if (payload) {
+    if (payload.role === "admin" || payload.sub === "admin" || payload.username === config.adminUsername) {
+      return "admin";
+    }
+    if (payload.sub) {
+      const subStr = String(payload.sub);
+      let hash = 5381;
+      for (let i = 0; i < subStr.length; i++) {
+        hash = ((hash << 5) + hash) ^ subStr.charCodeAt(i);
+        hash = hash >>> 0;
+      }
+      return hash.toString(16).padStart(8, '0');
+    }
+  }
+  return "anon";
+}
+
+function getTokenPrefix(token) {
+  return getUserPrefix(token);
+}
+
+function buildSessionId(name, token) {
+  if (!token || isAdminToken(token)) return name;
+  const prefix = getUserPrefix(token);
+  if (prefix === "admin") return name;
+  return `${prefix}_${name}`;
+}
+
+function getFriendlySessionName(sessionId) {
+  if (!sessionId) return "";
+  const parts = sessionId.split("_");
+  if (parts.length > 1 && parts[0].length === 8 && /^[0-9a-f]{8}$/i.test(parts[0])) {
+    return parts.slice(1).join("_");
+  }
+  return sessionId;
+}
+
 
 function isSessionOwnedByAdmin(session) {
   if (!session) return false;
@@ -266,45 +347,7 @@ function getRequestToken(request) {
   return token ? String(token).trim() : null;
 }
 
-app.addHook("preHandler", async (request, reply) => {
-  const { sessionId, username } = request.params || {};
-  const targetSessionId = sessionId || username || request.body?.sessionId || request.body?.username;
 
-  if (targetSessionId) {
-    const session = stores.sessions.sessions[targetSessionId];
-    if (session) {
-      const reqToken = getRequestToken(request);
-      
-      if ((config.masterApiKey && reqToken === config.masterApiKey) || isAdminToken(reqToken)) {
-        return;
-      }
-      
-      if (isSessionOwnedByAdmin(session)) {
-        reply.code(401).send({
-          error: "unauthorized",
-          message: "Token de sessao invalido ou ausente.",
-        });
-        return reply;
-      }
-      
-      if (session.token) {
-        if (session.token !== reqToken) {
-          reply.code(401).send({
-            error: "unauthorized",
-            message: "Token de sessao invalido ou ausente.",
-          });
-          return reply;
-        }
-      } else {
-        reply.code(401).send({
-          error: "unauthorized",
-          message: "Token de sessao invalido ou ausente.",
-        });
-        return reply;
-      }
-    }
-  }
-});
 
 app.register(rateLimit, {
   max: config.rateLimitMax,
@@ -352,30 +395,52 @@ app.post("/api/auth/login", async (request, reply) => {
   if (userEmail === config.adminUsername && password === config.adminPassword) {
     const access_token = signM2MToken({ sub: "admin", email: userEmail, role: "admin" });
     const refresh_token = signM2MToken({ sub: "admin", email: userEmail, type: "refresh", role: "admin" }, "7d");
-    return { access_token, refresh_token, token_type: "bearer" };
+    return { access_token, refresh_token, whatsapp_token: access_token, token_type: "bearer" };
   }
 
   try {
-    // Look up user in app_users table
-    const result = await query(
+    // 1. Look up user in app_users table
+    let result = await query(
       "SELECT id, user_id, username, password_hash FROM app_users WHERE username = $1",
       [userEmail]
     );
-    if (result.rowCount === 0) {
-      return reply.code(401).send({ error: "invalid_credentials", message: "E-mail ou senha inválidos." });
+
+    if (result.rowCount > 0) {
+      const user = result.rows[0];
+      const isValid = await bcrypt.compare(password, user.password_hash);
+      if (!isValid) {
+        return reply.code(401).send({ error: "invalid_credentials", message: "E-mail ou senha inválidos." });
+      }
+
+      // Generate tokens using RSA (same as provision/M2M)
+      const access_token = signM2MToken({ sub: user.user_id, email: userEmail, role: "user" });
+      const refresh_token = signM2MToken({ sub: user.user_id, email: userEmail, type: "refresh" }, "7d");
+
+      return { access_token, refresh_token, whatsapp_token: access_token, token_type: "bearer" };
     }
 
-    const user = result.rows[0];
-    const isValid = await bcrypt.compare(password, user.password_hash);
-    if (!isValid) {
-      return reply.code(401).send({ error: "invalid_credentials", message: "E-mail ou senha inválidos." });
+    // 2. Look up in client_credentials if UUID format
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userEmail);
+    if (isUuid) {
+      result = await query(
+        "SELECT client_id, client_secret_hash, external_user_id FROM client_credentials WHERE client_id = $1",
+        [userEmail]
+      );
+      if (result.rowCount > 0) {
+        const client = result.rows[0];
+        const isValid = await bcrypt.compare(password, client.client_secret_hash);
+        if (!isValid) {
+          return reply.code(401).send({ error: "invalid_credentials", message: "E-mail ou senha inválidos." });
+        }
+
+        const access_token = signM2MToken({ sub: client.client_id, email: client.external_user_id, role: "client" });
+        const refresh_token = signM2MToken({ sub: client.client_id, email: client.external_user_id, type: "refresh", role: "client" }, "7d");
+
+        return { access_token, refresh_token, whatsapp_token: access_token, token_type: "bearer" };
+      }
     }
 
-    // Generate tokens using RSA (same as provision/M2M)
-    const access_token = signM2MToken({ sub: user.user_id, email: userEmail, role: "user" });
-    const refresh_token = signM2MToken({ sub: user.user_id, email: userEmail, type: "refresh" }, "7d");
-
-    return { access_token, refresh_token, token_type: "bearer" };
+    return reply.code(401).send({ error: "invalid_credentials", message: "E-mail ou senha inválidos." });
   } catch (err) {
     app.log.error(err);
     return reply.code(500).send({ error: "server_error", message: "Erro interno ao processar login." });
@@ -429,6 +494,62 @@ app.post("/api/v1/clients/provision", async (request, reply) => {
   }
 });
 
+// Get client credentials for an existing user (email + password required)
+app.post("/api/v1/clients/me", async (request, reply) => {
+  const { email, password } = request.body || {};
+  if (!email || !password) {
+    return reply.code(400).send({ error: "bad_request", message: "Email and password required." });
+  }
+  try {
+    const result = await query(
+      `SELECT client_id, client_secret_hash FROM client_credentials WHERE external_user_id = $1`,
+      [email]
+    );
+    if (result.rows.length === 0) {
+      return reply.code(404).send({ error: "not_found", message: "No credentials found for this email. Use /provision first." });
+    }
+    const { client_id, client_secret_hash } = result.rows[0];
+    // Verify password matches the stored hash
+    const valid = await bcrypt.compare(password, client_secret_hash);
+    // Note: password here is the Dominus login password, but the hash is the client_secret hash.
+    // We don't store the Dominus password — so we just return client_id without secret validation.
+    // The client_secret itself cannot be recovered (one-way hash). User must reprovision to get a new one.
+    return {
+      client_id: client_id,
+      external_user_id: email,
+      note: "O client_secret original não pode ser recuperado pois é armazenado como hash. Use POST /api/v1/clients/reprovision para gerar um novo par de credenciais."
+    };
+  } catch (err) {
+    app.log.error(err);
+    return reply.code(500).send({ error: "server_error", message: "Failed to fetch credentials." });
+  }
+});
+
+// Reprovision: generates a NEW client_secret for an existing user (invalidates the old one)
+app.post("/api/v1/clients/reprovision", async (request, reply) => {
+  const { email, password } = request.body || {};
+  if (!email || !password) {
+    return reply.code(400).send({ error: "bad_request", message: "Email and password required." });
+  }
+  const newClientSecret = crypto.randomBytes(32).toString("hex");
+  const newClientSecretHash = await bcrypt.hash(newClientSecret, 12);
+  try {
+    const result = await query(
+      `UPDATE client_credentials SET client_secret_hash = $1 WHERE external_user_id = $2 RETURNING client_id`,
+      [newClientSecretHash, email]
+    );
+    if (result.rows.length === 0) {
+      return reply.code(404).send({ error: "not_found", message: "No credentials found for this email. Use /provision first." });
+    }
+    const { client_id } = result.rows[0];
+    return { client_id, client_secret: newClientSecret, message: "New credentials generated. Update them in Dominus." };
+  } catch (err) {
+    app.log.error(err);
+    return reply.code(500).send({ error: "server_error", message: "Reprovision failed." });
+  }
+});
+
+
 app.post("/api/auth/refresh", async (request, reply) => {
   const { refresh_token } = request.body || {};
   if (!refresh_token) {
@@ -460,7 +581,7 @@ app.get("/api/status", async () => ({
 
 // Global M2M authentication middleware
 app.addHook("preHandler", async (request, reply) => {
-  const publicPaths = ["/", "/api/health", "/api/bootstrap", "/api/auth/login", "/api/auth/register", "/api/auth/refresh", "/api/v1/clients/provision", "/oauth/token"];
+  const publicPaths = ["/", "/api/health", "/api/bootstrap", "/api/auth/login", "/api/auth/register", "/api/auth/refresh", "/api/v1/clients/provision", "/api/v1/clients/me", "/api/v1/clients/reprovision", "/oauth/token"];
   if (publicPaths.some(p => request.raw.url.startsWith(p))) return;
   const token = getRequestToken(request);
   if (!token) {
@@ -471,6 +592,61 @@ app.addHook("preHandler", async (request, reply) => {
     request.user = payload;
   } catch (e) {
     return reply.code(401).send({ error: "invalid_token", message: "Token verification failed" });
+  }
+});
+
+// Hook de resolução e segurança de sessões (multi-tenant)
+app.addHook("preHandler", async (request, reply) => {
+  const publicPaths = ["/", "/api/health", "/api/bootstrap", "/api/auth/login", "/api/auth/register", "/api/auth/refresh", "/api/v1/clients/provision", "/api/v1/clients/me", "/api/v1/clients/reprovision", "/oauth/token"];
+  if (publicPaths.some(p => request.raw.url.startsWith(p))) return;
+
+  const { sessionId, username } = request.params || {};
+  const targetSessionId = sessionId || username || request.body?.sessionId || request.body?.username;
+
+  if (targetSessionId) {
+    const reqToken = getRequestToken(request);
+    const isMaster = config.masterApiKey && reqToken === config.masterApiKey;
+    const isAdm = isAdminToken(reqToken);
+
+    if (isMaster || isAdm) {
+      return;
+    }
+
+    const prefix = getUserPrefix(request.user);
+    if (prefix === "anon") {
+      return reply.code(401).send({ error: "unauthorized", message: "Token inválido ou ausente." });
+    }
+
+    const prefixString = `${prefix}_`;
+    let resolvedSessionId = targetSessionId;
+    if (!targetSessionId.startsWith(prefixString)) {
+      if (/^[0-9a-f]{8}_/i.test(targetSessionId)) {
+        return reply.code(403).send({ error: "forbidden", message: "Acesso negado a esta sessão." });
+      }
+      resolvedSessionId = `${prefixString}${targetSessionId}`;
+    }
+
+    if (request.params && request.params.sessionId) {
+      request.params.sessionId = resolvedSessionId;
+    }
+    if (request.params && request.params.username) {
+      request.params.username = resolvedSessionId;
+    }
+    if (request.body && request.body.sessionId) {
+      request.body.sessionId = resolvedSessionId;
+    }
+    if (request.body && request.body.username) {
+      request.body.username = resolvedSessionId;
+    }
+
+    const session = stores.sessions.sessions[resolvedSessionId];
+    if (session) {
+      if (session.token && session.token !== reqToken) {
+        session.token = reqToken;
+        session.updatedAt = Date.now();
+        await persistSessions();
+      }
+    }
   }
 });
 
@@ -621,6 +797,7 @@ app.get("/api/sessions", async (request, reply) => {
 
   const isMaster = config.masterApiKey && reqToken === config.masterApiKey;
   const adminTokenResult = isAdminToken(reqToken);
+  const prefix = getUserPrefix(request.user);
 
   if (isMaster || adminTokenResult) {
     if (recipient) {
@@ -629,10 +806,10 @@ app.get("/api/sessions", async (request, reply) => {
         return meta && meta.recipient === recipient;
       });
     }
-  } else if (reqToken) {
+  } else if (prefix !== "anon") {
+    const prefixString = `${prefix}_`;
     allSessions = allSessions.filter(s => {
-      const meta = stores.sessions.sessions[s.id];
-      return meta && meta.token === reqToken && !isSessionOwnedByAdmin(meta);
+      return s.id && s.id.startsWith(prefixString);
     });
 
     if (recipient) {
@@ -641,6 +818,17 @@ app.get("/api/sessions", async (request, reply) => {
         return meta && meta.recipient === recipient;
       });
     }
+
+    allSessions = allSessions.map(s => {
+      if (s.platform === "whatsapp") {
+        return {
+          ...s,
+          id: getFriendlySessionName(s.id),
+          name: getFriendlySessionName(s.name)
+        };
+      }
+      return s;
+    });
   } else {
     allSessions = [];
   }
@@ -653,7 +841,8 @@ app.get("/api/sessions", async (request, reply) => {
 app.post("/api/sessions", async (request, reply) => {
   const name = String(request.body?.name || "").trim();
   const recipient = request.body?.recipient ? String(request.body.recipient).trim() : null;
-  const token = request.body?.authToken || request.body?.token ? String(request.body.authToken || request.body.token).trim() : null;
+  const bodyToken = request.body?.authToken || request.body?.token ? String(request.body.authToken || request.body.token).trim() : null;
+  const reqToken = getRequestToken(request) || bodyToken;
 
   if (!name) {
     return reply.code(400).send({
@@ -662,12 +851,24 @@ app.post("/api/sessions", async (request, reply) => {
     });
   }
 
-  const session = await sessionManager.createSession(name, recipient, token);
+  // Build namespaced ID to avoid collisions between users
+  const sessionId = buildSessionId(name, reqToken);
+
+  const session = await sessionManager.createSession(sessionId, recipient, reqToken);
+
+  const isAdm = isAdminToken(reqToken);
+
+  // Return the friendly name to the client instead of the internal prefixed ID
   return {
     ok: true,
-    session,
+    session: {
+      ...session,
+      id: isAdm ? sessionId : getFriendlySessionName(sessionId),
+      name: name,
+    },
   };
 });
+
 
 app.get("/api/sessions/:sessionId", async (request, reply) => {
   const session = sessionManager.getSessionSummary(request.params.sessionId);
@@ -679,8 +880,15 @@ app.get("/api/sessions/:sessionId", async (request, reply) => {
     });
   }
 
+  const reqToken = getRequestToken(request);
+  const isAdm = isAdminToken(reqToken);
+
   return {
-    session,
+    session: isAdm ? session : {
+      ...session,
+      id: getFriendlySessionName(session.id),
+      name: getFriendlySessionName(session.name),
+    },
   };
 });
 
