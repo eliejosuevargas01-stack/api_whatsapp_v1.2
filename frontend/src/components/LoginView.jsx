@@ -106,7 +106,7 @@ export default function LoginView({ onLoginSuccess }) {
               <Mail size={12} style={{ color: 'var(--text-muted)' }} /> E-mail de Admin
             </label>
             <input
-              type="text"
+              type="email"
               className="input-field"
               placeholder="exemplo@dominuslabs.online"
               value={email}
