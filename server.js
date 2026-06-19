@@ -433,8 +433,18 @@ app.post("/api/auth/login", async (request, reply) => {
           return reply.code(401).send({ error: "invalid_credentials", message: "E-mail ou senha inválidos." });
         }
 
-        const access_token = signM2MToken({ sub: client.client_id, email: client.external_user_id, role: "client" });
-        const refresh_token = signM2MToken({ sub: client.client_id, email: client.external_user_id, type: "refresh", role: "client" }, "7d");
+        // Buscar o user_id correspondente na tabela app_users pelo email (external_user_id)
+        const userRes = await query("SELECT user_id FROM app_users WHERE username = $1", [client.external_user_id]);
+        let tokenSub = client.client_id;
+        let userRole = "client";
+        if (userRes.rowCount > 0) {
+          tokenSub = userRes.rows[0].user_id;
+          userRole = "user";
+        }
+
+        console.log(`[M2M Login] Credenciais validadas. Gerando token com sub = "${tokenSub}" para email = "${client.external_user_id}"`);
+        const access_token = signM2MToken({ sub: tokenSub, email: client.external_user_id, role: userRole });
+        const refresh_token = signM2MToken({ sub: tokenSub, email: client.external_user_id, type: "refresh", role: userRole }, "7d");
 
         return { access_token, refresh_token, whatsapp_token: access_token, token_type: "bearer" };
       }
@@ -479,11 +489,29 @@ app.post("/api/v1/clients/provision", async (request, reply) => {
 
   console.log(`[M2M Provision] Recebendo credenciais do usuário para provisionamento: email = "${email}"`);
 
-  console.log(`[M2M Provision] Criando novas credenciais M2M (client_id e client_secret)...`);
-  const clientSecret = crypto.randomBytes(32).toString("hex");
-  const clientSecretHash = await bcrypt.hash(clientSecret, 12);
-
   try {
+    // 1. Criar ou atualizar usuário correspondente na tabela app_users
+    const userResult = await query("SELECT id FROM app_users WHERE username = $1", [email]);
+    const passwordHash = await bcrypt.hash(password, 12);
+    if (userResult.rowCount === 0) {
+      console.log(`[M2M Provision] Criando novo usuário correspondente na tabela app_users para "${email}"...`);
+      await query(
+        `INSERT INTO app_users (username, password_hash) VALUES ($1, $2)`,
+        [email, passwordHash]
+      );
+    } else {
+      console.log(`[M2M Provision] Usuário já cadastrado em app_users. Atualizando a senha para manter sincronizado...`);
+      await query(
+        `UPDATE app_users SET password_hash = $1 WHERE username = $2`,
+        [passwordHash, email]
+      );
+    }
+
+    // 2. Criar credenciais M2M
+    console.log(`[M2M Provision] Criando novas credenciais M2M (client_id e client_secret)...`);
+    const clientSecret = crypto.randomBytes(32).toString("hex");
+    const clientSecretHash = await bcrypt.hash(clientSecret, 12);
+
     console.log(`[M2M Provision] Gravando credenciais no banco de dados para email = "${email}"...`);
     const result = await query(
       `INSERT INTO client_credentials (client_secret_hash, external_user_id) VALUES ($1, $2) RETURNING client_id`,
@@ -511,18 +539,34 @@ app.post("/api/v1/clients/me", async (request, reply) => {
     return reply.code(400).send({ error: "bad_request", message: "Email and password required." });
   }
   try {
+    // 1. Validar a senha do usuário contra a tabela app_users
+    const userResult = await query(
+      "SELECT password_hash FROM app_users WHERE username = $1",
+      [email]
+    );
+    if (userResult.rowCount === 0) {
+      console.warn(`[M2M Client Me] Tentativa de obter chaves falhou: E-mail não encontrado em app_users: "${email}"`);
+      return reply.code(401).send({ error: "unauthorized", message: "Invalid email or password." });
+    }
+
+    const user = userResult.rows[0];
+    const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+    if (!isPasswordValid) {
+      console.warn(`[M2M Client Me] Tentativa de obter chaves falhou: Senha inválida em app_users para "${email}"`);
+      return reply.code(401).send({ error: "unauthorized", message: "Invalid email or password." });
+    }
+
+    // 2. Se a senha for válida, buscar as credenciais M2M
     const result = await query(
-      `SELECT client_id, client_secret_hash FROM client_credentials WHERE external_user_id = $1`,
+      `SELECT client_id FROM client_credentials WHERE external_user_id = $1`,
       [email]
     );
     if (result.rows.length === 0) {
       return reply.code(404).send({ error: "not_found", message: "No credentials found for this email. Use /provision first." });
     }
-    const { client_id, client_secret_hash } = result.rows[0];
+    const { client_id } = result.rows[0];
     
-    // Note: password here is the Dominus login password, but the hash is the client_secret hash.
-    // We don't store the Dominus password — so we just return client_id without secret validation.
-    // The client_secret itself cannot be recovered (one-way hash). User must reprovision to get a new one.
+    console.log(`[M2M Client Me] Credenciais solicitadas e validadas com sucesso para o email: "${email}". Retornando client_id: "${client_id}"`);
     return {
       client_id: client_id,
       external_user_id: email,
@@ -565,11 +609,29 @@ app.post("/api/v1/clients/reprovision", async (request, reply) => {
 
   console.log(`[M2M Reprovision] Recebendo solicitação de reprovisionamento M2M para o email: email = "${email}"`);
 
-  console.log(`[M2M Reprovision] Gerando novo par de credenciais M2M (client_id e client_secret)...`);
-  const newClientSecret = crypto.randomBytes(32).toString("hex");
-  const newClientSecretHash = await bcrypt.hash(newClientSecret, 12);
-  
   try {
+    // 1. Criar ou atualizar usuário correspondente na tabela app_users
+    const userResult = await query("SELECT id FROM app_users WHERE username = $1", [email]);
+    const passwordHash = await bcrypt.hash(password, 12);
+    if (userResult.rowCount === 0) {
+      console.log(`[M2M Reprovision] Criando novo usuário correspondente na tabela app_users para "${email}"...`);
+      await query(
+        `INSERT INTO app_users (username, password_hash) VALUES ($1, $2)`,
+        [email, passwordHash]
+      );
+    } else {
+      console.log(`[M2M Reprovision] Atualizando a senha em app_users para "${email}"...`);
+      await query(
+        `UPDATE app_users SET password_hash = $1 WHERE username = $2`,
+        [passwordHash, email]
+      );
+    }
+
+    // 2. Gerar novo par de credenciais M2M
+    console.log(`[M2M Reprovision] Gerando novo par de credenciais M2M (client_id e client_secret)...`);
+    const newClientSecret = crypto.randomBytes(32).toString("hex");
+    const newClientSecretHash = await bcrypt.hash(newClientSecret, 12);
+  
     console.log(`[M2M Reprovision] Atualizando credenciais no banco de dados para email = "${email}"...`);
     const result = await query(
       `UPDATE client_credentials SET client_secret_hash = $1 WHERE external_user_id = $2 RETURNING client_id`,
@@ -621,6 +683,119 @@ app.post("/api/auth/refresh", async (request, reply) => {
   }
 });
 
+// OAuth2 Client Credentials Flow Endpoint (/oauth/token)
+app.post("/oauth/token", async (request, reply) => {
+  let clientId = null;
+  let clientSecret = null;
+  let grantType = null;
+
+  // 1. Verificar Authorization Header (Basic Auth: Authorization: Basic Base64(client_id:client_secret))
+  const authHeader = request.headers.authorization;
+  if (authHeader && authHeader.toLowerCase().startsWith("basic ")) {
+    try {
+      const credentialsBase64 = authHeader.substring(6).trim();
+      const credentialsStr = Buffer.from(credentialsBase64, "base64").toString("ascii");
+      const parts = credentialsStr.split(":");
+      if (parts.length === 2) {
+        clientId = parts[0];
+        clientSecret = parts[1];
+      }
+    } catch (err) {
+      console.warn("[OAuth Token] Erro ao decodificar Authorization Basic Header:", err.message);
+    }
+  }
+
+  // 2. Se não veio no Header, verificar no body (JSON ou form-urlencoded)
+  const body = request.body || {};
+  if (!clientId && body.client_id) {
+    clientId = body.client_id;
+  }
+  if (!clientSecret && body.client_secret) {
+    clientSecret = body.client_secret;
+  }
+  
+  grantType = body.grant_type || request.query?.grant_type;
+
+  // Em client_credentials flow, o grant_type deve ser "client_credentials"
+  if (grantType !== "client_credentials") {
+    console.warn(`[OAuth Token] Rejeitado: grant_type inválido "${grantType}"`);
+    return reply.code(400).send({
+      error: "unsupported_grant_type",
+      message: "O grant_type deve ser client_credentials."
+    });
+  }
+
+  if (!clientId || !clientSecret) {
+    return reply.code(400).send({
+      error: "invalid_request",
+      message: "client_id e client_secret são obrigatórios."
+    });
+  }
+
+  try {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clientId);
+    if (!isUuid) {
+      return reply.code(400).send({
+        error: "invalid_client",
+        message: "O client_id fornecido não é um UUID válido."
+      });
+    }
+
+    // 3. Buscar credencial no banco de dados pelo client_id (UUID)
+    const result = await query(
+      "SELECT client_id, client_secret_hash, external_user_id FROM client_credentials WHERE client_id = $1",
+      [clientId]
+    );
+
+    if (result.rowCount === 0) {
+      console.warn(`[OAuth Token] Chave client_id não encontrada no banco: "${clientId}"`);
+      return reply.code(401).send({
+        error: "invalid_client",
+        message: "Credenciais de cliente inválidas."
+      });
+    }
+
+    const client = result.rows[0];
+    const isValid = await bcrypt.compare(clientSecret, client.client_secret_hash);
+    if (!isValid) {
+      console.warn(`[OAuth Token] Chave client_secret incorreta para o client_id: "${clientId}"`);
+      return reply.code(401).send({
+        error: "invalid_client",
+        message: "Credenciais de cliente inválidas."
+      });
+    }
+
+    // 4. Buscar o correspondente user_id do app_users
+    const userRes = await query("SELECT user_id FROM app_users WHERE username = $1", [client.external_user_id]);
+    let tokenSub = client.client_id; // fallback se usuário não existir
+    let userRole = "client";
+    if (userRes.rowCount > 0) {
+      tokenSub = userRes.rows[0].user_id;
+      userRole = "user";
+    }
+
+    // 5. Gerar token usando o user_id (para unificar com o painel)
+    console.log(`[OAuth Token] Gerando token unificado M2M para o email "${client.external_user_id}". sub = "${tokenSub}"`);
+    const access_token = signM2MToken({ sub: tokenSub, email: client.external_user_id, role: userRole });
+    const refresh_token = signM2MToken({ sub: tokenSub, email: client.external_user_id, type: "refresh", role: userRole }, "7d");
+
+    // Retornar formato padrão do OAuth2 token response
+    return {
+      access_token,
+      expires_in: 3600, // 1h
+      token_type: "Bearer",
+      refresh_token,
+      scope: "all"
+    };
+  } catch (err) {
+    app.log.error(err);
+    return reply.code(500).send({
+      error: "server_error",
+      message: "Erro interno no servidor ao processar oauth token."
+    });
+  }
+});
+
 app.get("/api/status", async () => ({
   sessionCount: Object.keys(stores.sessions.sessions).length,
   totals: getGlobalStats(stores),
@@ -629,8 +804,13 @@ app.get("/api/status", async () => ({
 
 // Global M2M authentication middleware
 app.addHook("preHandler", async (request, reply) => {
-  const publicPaths = ["/", "/api/health", "/api/bootstrap", "/api/auth/login", "/api/auth/register", "/api/auth/refresh", "/api/v1/clients/provision", "/api/v1/clients/me", "/api/v1/clients/reprovision", "/oauth/token"];
-  if (publicPaths.some(p => request.raw.url.startsWith(p))) return;
+  const url = request.raw.url;
+  // Só aplica autenticação nas rotas de API
+  if (!url.startsWith("/api/")) return;
+
+  const publicApiPaths = ["/api/health", "/api/bootstrap", "/api/auth/login", "/api/auth/register", "/api/auth/refresh", "/api/v1/clients/provision", "/api/v1/clients/me", "/api/v1/clients/reprovision", "/oauth/token"];
+  if (publicApiPaths.some(p => url.startsWith(p))) return;
+
   const token = getRequestToken(request);
   if (!token) {
     return reply.code(401).send({ error: "unauthorized", message: "Missing token" });
@@ -645,8 +825,12 @@ app.addHook("preHandler", async (request, reply) => {
 
 // Hook de resolução e segurança de sessões (multi-tenant)
 app.addHook("preHandler", async (request, reply) => {
-  const publicPaths = ["/", "/api/health", "/api/bootstrap", "/api/auth/login", "/api/auth/register", "/api/auth/refresh", "/api/v1/clients/provision", "/api/v1/clients/me", "/api/v1/clients/reprovision", "/oauth/token"];
-  if (publicPaths.some(p => request.raw.url.startsWith(p))) return;
+  const url = request.raw.url;
+  // Só aplica nas rotas de API
+  if (!url.startsWith("/api/")) return;
+
+  const publicApiPaths = ["/api/health", "/api/bootstrap", "/api/auth/login", "/api/auth/register", "/api/auth/refresh", "/api/v1/clients/provision", "/api/v1/clients/me", "/api/v1/clients/reprovision", "/oauth/token"];
+  if (publicApiPaths.some(p => url.startsWith(p))) return;
 
   const { sessionId, username } = request.params || {};
   const targetSessionId = sessionId || username || request.body?.sessionId || request.body?.username;
@@ -854,7 +1038,10 @@ app.get("/api/sessions", async (request, reply) => {
         return meta && meta.recipient === recipient;
       });
     }
+    // Admin/Master vê todas as sessões com seus nomes reais (com ou sem prefixo)
+  } else if (prefix !== "anon") {
     const prefixString = `${prefix}-`;
+    // Filtrar sessões pertencentes a este usuário
     allSessions = allSessions.filter(s => {
       return s.id && s.id.startsWith(prefixString);
     });
@@ -866,6 +1053,7 @@ app.get("/api/sessions", async (request, reply) => {
       });
     }
 
+    // Para o usuário comum, removemos o prefixo do id e do name para ser transparente (amigável)
     allSessions = allSessions.map(s => {
       if (s.platform === "whatsapp") {
         return {
