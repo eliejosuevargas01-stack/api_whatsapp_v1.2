@@ -28,11 +28,12 @@ export default function LoginView({ onLoginSuccess }) {
 
     setLoading(false);
 
-    if (response.ok && response.data?.whatsapp_token) {
-      localStorage.setItem('whatsapp_session_token', response.data.whatsapp_token);
+    if (response.ok && (response.data?.access_token || response.data?.whatsapp_token)) {
+      const token = response.data.access_token || response.data.whatsapp_token;
+      localStorage.setItem('whatsapp_session_token', token);
       onLoginSuccess();
     } else {
-      setError(response.error || 'Credenciais inválidas ou erro ao conectar com o CRM.');
+      setError(response.error || 'Credenciais inválidas.');
     }
   };
 
@@ -105,7 +106,7 @@ export default function LoginView({ onLoginSuccess }) {
               <Mail size={12} style={{ color: 'var(--text-muted)' }} /> E-mail de Admin
             </label>
             <input
-              type="email"
+              type="text"
               className="input-field"
               placeholder="exemplo@dominuslabs.online"
               value={email}
@@ -128,7 +129,7 @@ export default function LoginView({ onLoginSuccess }) {
             <input
               type="password"
               className="input-field"
-              placeholder="Digite sua senha do CRM"
+              placeholder="Digite sua senha..."
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               disabled={loading}
@@ -165,7 +166,7 @@ export default function LoginView({ onLoginSuccess }) {
             {loading ? (
               <>
                 <Loader2 className="animate-spin" size={18} />
-                Autenticando com o CRM...
+                Autenticando...
               </>
             ) : (
               <>

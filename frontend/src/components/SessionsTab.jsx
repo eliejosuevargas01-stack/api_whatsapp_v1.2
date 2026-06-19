@@ -29,6 +29,67 @@ export default function SessionsTab({ sessions, onRefreshSessions, selectedSessi
   const [settingsNote, setSettingsNote] = useState('');
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
+  // M2M API Credentials state
+  const [m2mClientId, setM2mClientId] = useState('');
+  const [m2mHasCredentials, setM2mHasCredentials] = useState(false);
+  const [m2mPasswordInput, setM2mPasswordInput] = useState('');
+  const [m2mSecretResponse, setM2mSecretResponse] = useState('');
+  const [isGeneratingM2m, setIsGeneratingM2m] = useState(false);
+  const [m2mNote, setM2mNote] = useState('');
+
+  const getEmailFromToken = () => {
+    const tokenStr = localStorage.getItem('whatsapp_session_token');
+    if (!tokenStr) return '';
+    try {
+      const base64Url = tokenStr.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+      }).join(''));
+      return JSON.parse(jsonPayload).email || '';
+    } catch (e) {
+      return '';
+    }
+  };
+
+  const loadM2mCredentials = async () => {
+    const response = await apiRequest('/api/v1/clients/credentials');
+    if (response.ok && response.data) {
+      setM2mClientId(response.data.client_id || '');
+      setM2mHasCredentials(!!response.data.hasCredentials);
+    }
+  };
+
+  const handleGenerateM2m = async (e) => {
+    e.preventDefault();
+    if (!m2mPasswordInput) return;
+    setIsGeneratingM2m(true);
+    setM2mNote('Gerando credenciais M2M...');
+    setM2mSecretResponse('');
+    
+    const email = getEmailFromToken();
+    const response = await apiRequest('/api/v1/clients/reprovision', {
+      method: 'POST',
+      body: JSON.stringify({ email, password: m2mPasswordInput })
+    });
+    
+    setIsGeneratingM2m(false);
+    if (response.ok && response.data) {
+      setM2mClientId(response.data.client_id);
+      setM2mSecretResponse(response.data.client_secret);
+      setM2mHasCredentials(true);
+      setM2mPasswordInput('');
+      setM2mNote('Novas credenciais M2M geradas com sucesso!');
+    } else {
+      setM2mNote(response.error || 'Falha ao gerar credenciais M2M. Verifique sua senha.');
+    }
+  };
+
+  // Carrega credenciais M2M ao montar o componente
+  useEffect(() => {
+    loadM2mCredentials();
+  }, []);
+
   const selectedSession = sessions.find(s => s.id === selectedSessionId) || null;
 
   // Load settings when session changes
@@ -637,6 +698,95 @@ export default function SessionsTab({ sessions, onRefreshSessions, selectedSessi
                   </button>
                 </form>
                 {crmNote && <div className="settings-info-note">{crmNote}</div>}
+              </div>
+
+              {/* M2M API Credentials card */}
+              <div className="detail-card m2m-card glass-panel">
+                <h3>Credenciais de Integração API (M2M)</h3>
+                <div style={{ marginBottom: '16px', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                  Use estas credenciais para se autenticar e consumir a API de forma programática ou manual usando tokens RSA.
+                </div>
+
+                {m2mHasCredentials ? (
+                  <div className="form-group" style={{ marginBottom: '16px' }}>
+                    <label className="form-label">Client ID Ativo</label>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <input 
+                        type="text" 
+                        className="input-field" 
+                        value={m2mClientId} 
+                        readOnly 
+                        style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}
+                      />
+                      <button 
+                        type="button" 
+                        className="btn btn-secondary btn-sm" 
+                        onClick={() => {
+                          navigator.clipboard.writeText(m2mClientId);
+                          alert('Client ID copiado para a área de transferência!');
+                        }}
+                      >
+                        Copiar
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ marginBottom: '16px', padding: '10px', backgroundColor: 'rgba(239, 68, 68, 0.1)', borderRadius: '4px', fontSize: '0.85rem', color: '#f87171' }}>
+                    Nenhuma credencial M2M ativa encontrada. Utilize o formulário abaixo para gerar.
+                  </div>
+                )}
+
+                {m2mSecretResponse && (
+                  <div style={{ marginBottom: '16px', padding: '12px', backgroundColor: 'rgba(34, 197, 94, 0.15)', border: '1px solid rgba(34, 197, 94, 0.3)', borderRadius: '6px' }}>
+                    <strong style={{ color: '#4ade80', fontSize: '0.9rem', display: 'block', marginBottom: '6px' }}>
+                      Atenção: Salve o Client Secret abaixo!
+                    </strong>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                      Por questões de segurança, ele é armazenado de forma criptografada e não poderá ser exibido novamente.
+                    </div>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="form-label">Client Secret</label>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <input 
+                          type="text" 
+                          className="input-field" 
+                          value={m2mSecretResponse} 
+                          readOnly 
+                          style={{ fontFamily: 'monospace', fontSize: '0.8rem', backgroundColor: '#1e293b', color: '#4ade80' }}
+                        />
+                        <button 
+                          type="button" 
+                          className="btn btn-success btn-sm" 
+                          onClick={() => {
+                            navigator.clipboard.writeText(m2mSecretResponse);
+                            alert('Client Secret copiado!');
+                          }}
+                        >
+                          Copiar
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <form onSubmit={handleGenerateM2m} style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '16px' }}>
+                  <div className="form-group">
+                    <label className="form-label">Senha do Painel (para confirmar)</label>
+                    <input 
+                      type="password" 
+                      className="input-field" 
+                      value={m2mPasswordInput} 
+                      onChange={(e) => setM2mPasswordInput(e.target.value)}
+                      placeholder="Digite a sua senha do painel..."
+                      required
+                    />
+                  </div>
+
+                  <button type="submit" className="btn btn-primary btn-sm" disabled={isGeneratingM2m} style={{ marginTop: '8px', width: '100%' }}>
+                    {isGeneratingM2m ? 'Gerando...' : m2mHasCredentials ? 'Gerar Novas Credenciais' : 'Gerar Credenciais Iniciais'}
+                  </button>
+                </form>
+                {m2mNote && <div className="settings-info-note" style={{ marginTop: '10px' }}>{m2mNote}</div>}
               </div>
             </div>
           </div>

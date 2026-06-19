@@ -476,18 +476,28 @@ app.post("/api/v1/clients/provision", async (request, reply) => {
   if (!email || !password) {
     return reply.code(400).send({ error: "bad_request", message: "Email and password required." });
   }
+
+  console.log(`[M2M Provision] Recebendo credenciais do usuário para provisionamento: email = "${email}"`);
+
+  console.log(`[M2M Provision] Criando novas credenciais M2M (client_id e client_secret)...`);
   const clientSecret = crypto.randomBytes(32).toString("hex");
   const clientSecretHash = await bcrypt.hash(clientSecret, 12);
+
   try {
+    console.log(`[M2M Provision] Gravando credenciais no banco de dados para email = "${email}"...`);
     const result = await query(
       `INSERT INTO client_credentials (client_secret_hash, external_user_id) VALUES ($1, $2) RETURNING client_id`,
       [clientSecretHash, email]
     );
     const { client_id } = result.rows[0];
+
+    console.log(`[M2M Provision] Credenciais armazenadas com sucesso. client_id = "${client_id}"`);
+    console.log(`[M2M Provision] Enviando cópia do client_id e client_secret na resposta para o Dominus/Cliente...`);
     return { client_id, client_secret: clientSecret };
   } catch (err) {
     app.log.error(err);
     if (err.code === "23505") {
+      console.warn(`[M2M Provision] Conflito: O e-mail "${email}" já foi provisionado anteriormente.`);
       return reply.code(409).send({ error: "conflict", message: "Email already provisioned." });
     }
     return reply.code(500).send({ error: "server_error", message: "Provision failed." });
@@ -509,8 +519,7 @@ app.post("/api/v1/clients/me", async (request, reply) => {
       return reply.code(404).send({ error: "not_found", message: "No credentials found for this email. Use /provision first." });
     }
     const { client_id, client_secret_hash } = result.rows[0];
-    // Verify password matches the stored hash
-    const valid = await bcrypt.compare(password, client_secret_hash);
+    
     // Note: password here is the Dominus login password, but the hash is the client_secret hash.
     // We don't store the Dominus password — so we just return client_id without secret validation.
     // The client_secret itself cannot be recovered (one-way hash). User must reprovision to get a new one.
@@ -525,23 +534,62 @@ app.post("/api/v1/clients/me", async (request, reply) => {
   }
 });
 
+// Get existing M2M credentials metadata for the current logged in user (requires JWT auth)
+app.get("/api/v1/clients/credentials", async (request, reply) => {
+  const email = request.user?.email;
+  if (!email) {
+    return reply.code(400).send({ error: "bad_request", message: "Email não identificado no token." });
+  }
+
+  try {
+    const result = await query(
+      "SELECT client_id FROM client_credentials WHERE external_user_id = $1",
+      [email]
+    );
+    if (result.rowCount === 0) {
+      return { client_id: null, hasCredentials: false };
+    }
+    return { client_id: result.rows[0].client_id, hasCredentials: true };
+  } catch (err) {
+    app.log.error(err);
+    return reply.code(500).send({ error: "server_error", message: "Erro ao buscar credenciais." });
+  }
+});
+
 // Reprovision: generates a NEW client_secret for an existing user (invalidates the old one)
 app.post("/api/v1/clients/reprovision", async (request, reply) => {
   const { email, password } = request.body || {};
   if (!email || !password) {
     return reply.code(400).send({ error: "bad_request", message: "Email and password required." });
   }
+
+  console.log(`[M2M Reprovision] Recebendo solicitação de reprovisionamento M2M para o email: email = "${email}"`);
+
+  console.log(`[M2M Reprovision] Gerando novo par de credenciais M2M (client_id e client_secret)...`);
   const newClientSecret = crypto.randomBytes(32).toString("hex");
   const newClientSecretHash = await bcrypt.hash(newClientSecret, 12);
+  
   try {
+    console.log(`[M2M Reprovision] Atualizando credenciais no banco de dados para email = "${email}"...`);
     const result = await query(
       `UPDATE client_credentials SET client_secret_hash = $1 WHERE external_user_id = $2 RETURNING client_id`,
       [newClientSecretHash, email]
     );
     if (result.rows.length === 0) {
-      return reply.code(404).send({ error: "not_found", message: "No credentials found for this email. Use /provision first." });
+      console.warn(`[M2M Reprovision] Credenciais não encontradas para o e-mail "${email}". Tentando provisionamento inicial...`);
+      const insertResult = await query(
+        `INSERT INTO client_credentials (client_secret_hash, external_user_id) VALUES ($1, $2) RETURNING client_id`,
+        [newClientSecretHash, email]
+      );
+      const { client_id } = insertResult.rows[0];
+      console.log(`[M2M Reprovision] Credenciais criadas com sucesso (fallback do provision). client_id = "${client_id}"`);
+      console.log(`[M2M Reprovision] Enviando cópia do client_id e client_secret na resposta para o Dominus/Cliente...`);
+      return { client_id, client_secret: newClientSecret, message: "Credentials provisioned." };
     }
     const { client_id } = result.rows[0];
+    
+    console.log(`[M2M Reprovision] Credenciais atualizadas com sucesso. client_id = "${client_id}"`);
+    console.log(`[M2M Reprovision] Enviando cópia do client_id e client_secret na resposta para o Dominus/Cliente...`);
     return { client_id, client_secret: newClientSecret, message: "New credentials generated. Update them in Dominus." };
   } catch (err) {
     app.log.error(err);
