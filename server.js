@@ -340,17 +340,18 @@ app.get("/api/bootstrap", async () => ({
 }));
 
 app.post("/api/auth/login", async (request, reply) => {
-  const { email, password } = request.body || {};
-  if (!email || !password) {
+  const { email, username, password } = request.body || {};
+  const userEmail = email || username;
+  if (!userEmail || !password) {
     return reply.code(400).send({
       error: "bad_request",
       message: "Por favor, informe e-mail e senha.",
     });
   }
   // Admin login via env vars
-  if (email === config.adminUsername && password === config.adminPassword) {
-    const access_token = signM2MToken({ sub: "admin", email, role: "admin" });
-    const refresh_token = signM2MToken({ sub: "admin", email, type: "refresh", role: "admin" }, "7d");
+  if (userEmail === config.adminUsername && password === config.adminPassword) {
+    const access_token = signM2MToken({ sub: "admin", email: userEmail, role: "admin" });
+    const refresh_token = signM2MToken({ sub: "admin", email: userEmail, type: "refresh", role: "admin" }, "7d");
     return { access_token, refresh_token, token_type: "bearer" };
   }
 
@@ -358,7 +359,7 @@ app.post("/api/auth/login", async (request, reply) => {
     // Look up user in app_users table
     const result = await query(
       "SELECT id, user_id, username, password_hash FROM app_users WHERE username = $1",
-      [email]
+      [userEmail]
     );
     if (result.rowCount === 0) {
       return reply.code(401).send({ error: "invalid_credentials", message: "E-mail ou senha inválidos." });
@@ -371,8 +372,8 @@ app.post("/api/auth/login", async (request, reply) => {
     }
 
     // Generate tokens using RSA (same as provision/M2M)
-    const access_token = signM2MToken({ sub: user.user_id, email, role: "user" });
-    const refresh_token = signM2MToken({ sub: user.user_id, email, type: "refresh" }, "7d");
+    const access_token = signM2MToken({ sub: user.user_id, email: userEmail, role: "user" });
+    const refresh_token = signM2MToken({ sub: user.user_id, email: userEmail, type: "refresh" }, "7d");
 
     return { access_token, refresh_token, token_type: "bearer" };
   } catch (err) {
