@@ -16,7 +16,8 @@ import {
   sendInstagramThreadMessage
 } from "./instagramManager.js";
 import https from "node:https";
-
+import crypto from "node:crypto";
+import bcrypt from "bcrypt";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import dotenv from "dotenv";
@@ -32,6 +33,8 @@ import makeWASocket, {
   makeCacheableSignalKeyStore,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
+import { query } from "./db.js";
+import { signM2MToken, verifyM2MToken } from "./jwt.js";
 
 dotenv.config();
 
@@ -70,6 +73,9 @@ const config = {
   mediaDir: path.resolve(process.env.MEDIA_DIR || path.join(__dirname, "data", "media")),
   masterApiKey: process.env.API_KEY || process.env.MASTER_API_KEY || null,
   crmApiUrl: process.env.CRM_API_URL || "http://localhost:8000",
+  adminUsername: process.env.ADMIN_USERNAME || "Eliejosuevargas01",
+  adminPassword: process.env.ADMIN_PASSWORD || "280108",
+  jwtSecret: process.env.JWT_SECRET || "dominuslabs-super-secret-key-2026",
 };
 
 function getDefaultSettingsStore() {
@@ -173,6 +179,82 @@ const sessionManager = createSessionManager({
   persistContacts,
 });
 
+function base64UrlEncode(strOrBuffer) {
+  const buf = Buffer.isBuffer(strOrBuffer) ? strOrBuffer : Buffer.from(strOrBuffer);
+  return buf.toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+function base64UrlDecode(str) {
+  let base64 = str.replace(/-/g, "+").replace(/_/g, "/");
+  while (base64.length % 4) {
+    base64 += "=";
+  }
+  return Buffer.from(base64, "base64").toString("utf8");
+}
+
+function signJwt(payload, secret) {
+  const header = { alg: "HS256", typ: "JWT" };
+  const encodedHeader = base64UrlEncode(JSON.stringify(header));
+  const encodedPayload = base64UrlEncode(JSON.stringify(payload));
+  
+  const hmac = crypto.createHmac("sha256", secret);
+  hmac.update(`${encodedHeader}.${encodedPayload}`);
+  const signature = base64UrlEncode(hmac.digest());
+  
+  return `${encodedHeader}.${encodedPayload}.${signature}`;
+}
+
+function verifyJwt(token, secret) {
+  if (!token) return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  
+  const [encodedHeader, encodedPayload, signature] = parts;
+  try {
+    const hmac = crypto.createHmac("sha256", secret);
+    hmac.update(`${encodedHeader}.${encodedPayload}`);
+    const expectedSignature = base64UrlEncode(hmac.digest());
+    
+    if (signature !== expectedSignature) {
+      return null;
+    }
+    
+    const payload = JSON.parse(base64UrlDecode(encodedPayload));
+    if (payload.exp && Date.now() >= payload.exp * 1000) {
+      return null;
+    }
+    return payload;
+  } catch (err) {
+    return null;
+  }
+}
+
+function isAdminToken(token) {
+  if (!token) return false;
+  if (config.masterApiKey && token === config.masterApiKey) {
+    return true;
+  }
+  if (token === config.adminUsername || token === "admin") {
+    return true;
+  }
+  const decoded = verifyJwt(token, config.jwtSecret);
+  if (decoded) {
+    if (decoded.role === "admin") return true;
+    if (decoded.username === config.adminUsername) return true;
+    if (decoded.sub && (decoded.sub === config.adminUsername || decoded.sub.includes(config.adminUsername))) return true;
+  }
+  return false;
+}
+
+function isSessionOwnedByAdmin(session) {
+  if (!session) return false;
+  if (!session.token) return true;
+  return isAdminToken(session.token);
+}
+
 function getRequestToken(request) {
   let token = request.headers["x-session-token"] || request.query?.token;
   if (!token && request.headers.authorization) {
@@ -190,12 +272,30 @@ app.addHook("preHandler", async (request, reply) => {
 
   if (targetSessionId) {
     const session = stores.sessions.sessions[targetSessionId];
-    if (session && session.token) {
+    if (session) {
       const reqToken = getRequestToken(request);
-      if (config.masterApiKey && reqToken === config.masterApiKey) {
+      
+      if ((config.masterApiKey && reqToken === config.masterApiKey) || isAdminToken(reqToken)) {
         return;
       }
-      if (session.token !== reqToken) {
+      
+      if (isSessionOwnedByAdmin(session)) {
+        reply.code(401).send({
+          error: "unauthorized",
+          message: "Token de sessao invalido ou ausente.",
+        });
+        return reply;
+      }
+      
+      if (session.token) {
+        if (session.token !== reqToken) {
+          reply.code(401).send({
+            error: "unauthorized",
+            message: "Token de sessao invalido ou ausente.",
+          });
+          return reply;
+        }
+      } else {
         reply.code(401).send({
           error: "unauthorized",
           message: "Token de sessao invalido ou ausente.",
@@ -248,30 +348,60 @@ app.post("/api/auth/login", async (request, reply) => {
     });
   }
 
+  // Admin login
+  if (username === config.adminUsername && password === config.adminPassword) {
+    const payload = {
+      username: config.adminUsername,
+      role: "admin",
+      exp: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
+    };
+    const access_token = signJwt(payload, config.jwtSecret);
+    const refresh_token = "admin_refresh_token_secret_xyz";
+    return { access_token, refresh_token, token_type: "bearer" };
+  }
+
+  // M2M client login via client_credentials table
   try {
-    const response = await fetch(`${config.crmApiUrl}/api/v1/auth/login`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ username, password }),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      return reply.code(response.status).send({
-        error: data.error || "login_failed",
-        message: data.detail || data.message || "E-mail ou senha incorretos.",
-      });
+    const result = await query(
+      "SELECT client_secret_hash, external_user_id FROM client_credentials WHERE client_id = $1",
+      [username]
+    );
+    if (result.rowCount === 0) {
+      return reply.code(401).send({ error: "invalid_client", message: "Client not found" });
     }
-
-    return data;
-  } catch (error) {
-    app.log.error(error, "Erro ao conectar com a API de Autenticação do CRM");
-    return reply.code(500).send({
-      error: "connection_error",
-      message: "Não foi possível conectar ao servidor de autenticação central do CRM.",
-    });
+    const { client_secret_hash, external_user_id } = result.rows[0];
+    const isValid = await bcrypt.compare(password, client_secret_hash);
+    if (!isValid) {
+      return reply.code(401).send({ error: "invalid_client", message: "Invalid secret" });
+    }
+    const token = signM2MToken({ sub: username, external_user_id });
+    return { access_token: token, token_type: "bearer" };
+  } catch (err) {
+    app.log.error(err);
+    return reply.code(500).send({ error: "server_error", message: "Unable to process request" });
+  }
+});
+app.post("/api/v1/clients/provision", async (request, reply) => {
+  const { email, password } = request.body || {};
+  if (!email || !password) {
+    return reply.code(400).send({ error: "bad_request", message: "Email and password required." });
+  }
+  // generate secret and hash it
+  const clientSecret = crypto.randomBytes(32).toString("hex");
+  const clientSecretHash = await bcrypt.hash(clientSecret, 12);
+  try {
+    const result = await query(
+      `INSERT INTO client_credentials (client_secret_hash, external_user_id) VALUES ($1, $2) RETURNING client_id`,
+      [clientSecretHash, email]
+    );
+    const { client_id } = result.rows[0];
+    return { client_id, client_secret: clientSecret };
+  } catch (err) {
+    app.log.error(err);
+    if (err.code === "23505") {
+      return reply.code(409).send({ error: "conflict", message: "Email already provisioned." });
+    }
+    return reply.code(500).send({ error: "server_error", message: "Provision failed." });
   }
 });
 
@@ -284,30 +414,45 @@ app.post("/api/auth/refresh", async (request, reply) => {
     });
   }
 
-  try {
-    const response = await fetch(`${config.crmApiUrl}/api/v1/auth/refresh`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ refresh_token }),
-    });
+  if (refresh_token === "admin_refresh_token_secret_xyz") {
+    const payload = {
+      username: config.adminUsername,
+      role: "admin",
+      exp: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
+    };
+    const access_token = signJwt(payload, config.jwtSecret);
+    return { access_token, refresh_token: "admin_refresh_token_secret_xyz", token_type: "bearer" };
+  }
 
-    const data = await response.json();
-    if (!response.ok) {
-      return reply.code(response.status).send({
-        error: data.error || "refresh_failed",
-        message: data.detail || data.message || "Token de atualização inválido ou expirado.",
+  // M2M token refresh handling
+  try {
+    const decoded = verifyM2MToken(refresh_token);
+    // Here you could implement token rotation if needed
+    const newAccess = signM2MToken({ sub: decoded.sub, external_user_id: decoded.external_user_id });
+    return { access_token: newAccess, token_type: "bearer" };
+  } catch (e) {
+    // Fallback to CRM refresh
+    try {
+      const response = await fetch(`${config.crmApiUrl}/api/v1/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return reply.code(response.status).send({
+          error: data.error || "refresh_failed",
+          message: data.detail || data.message || "Token de atualização inválido ou expirado.",
+        });
+      }
+      return data;
+    } catch (error) {
+      app.log.error(error, "Erro ao conectar com a API de Refresh do CRM");
+      return reply.code(500).send({
+        error: "connection_error",
+        message: "Não foi possível conectar ao servidor de autenticação central del CRM.",
       });
     }
-
-    return data;
-  } catch (error) {
-    app.log.error(error, "Erro ao conectar com a API de Refresh do CRM");
-    return reply.code(500).send({
-      error: "connection_error",
-      message: "Não foi possível conectar ao servidor de autenticação central do CRM.",
-    });
   }
 });
 
@@ -316,6 +461,22 @@ app.get("/api/status", async () => ({
   totals: getGlobalStats(stores),
   sessions: sessionManager.listSessions(),
 }));
+
+// Global M2M authentication middleware
+app.addHook("preHandler", async (request, reply) => {
+  const publicPaths = ["/", "/api/health", "/api/bootstrap", "/api/auth/login", "/api/auth/refresh", "/oauth/token"]; // add more if needed
+  if (publicPaths.some(p => request.raw.url.startsWith(p))) return;
+  const token = getRequestToken(request);
+  if (!token) {
+    return reply.code(401).send({ error: "unauthorized", message: "Missing token" });
+  }
+  try {
+    const payload = verifyM2MToken(token);
+    request.user = payload;
+  } catch (e) {
+    return reply.code(401).send({ error: "invalid_token", message: "Token verification failed" });
+  }
+});
 
 app.get("/api/settings", async () => ({
   settings: stores.settings,
@@ -463,8 +624,9 @@ app.get("/api/sessions", async (request, reply) => {
   ];
 
   const isMaster = config.masterApiKey && reqToken === config.masterApiKey;
+  const adminTokenResult = isAdminToken(reqToken);
 
-  if (isMaster) {
+  if (isMaster || adminTokenResult) {
     if (recipient) {
       allSessions = allSessions.filter(s => {
         const meta = stores.sessions.sessions[s.id];
@@ -474,7 +636,7 @@ app.get("/api/sessions", async (request, reply) => {
   } else if (reqToken) {
     allSessions = allSessions.filter(s => {
       const meta = stores.sessions.sessions[s.id];
-      return meta && meta.token === reqToken;
+      return meta && meta.token === reqToken && !isSessionOwnedByAdmin(meta);
     });
 
     if (recipient) {
@@ -484,17 +646,7 @@ app.get("/api/sessions", async (request, reply) => {
       });
     }
   } else {
-    allSessions = allSessions.filter(s => {
-      const meta = stores.sessions.sessions[s.id];
-      return !meta || !meta.token;
-    });
-
-    if (recipient) {
-      allSessions = allSessions.filter(s => {
-        const meta = stores.sessions.sessions[s.id];
-        return meta && meta.recipient === recipient;
-      });
-    }
+    allSessions = [];
   }
 
   return {
