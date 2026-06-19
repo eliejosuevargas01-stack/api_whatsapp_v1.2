@@ -347,6 +347,12 @@ app.post("/api/auth/login", async (request, reply) => {
       message: "Por favor, informe e-mail e senha.",
     });
   }
+  // Admin login via env vars
+  if (email === config.adminUsername && password === config.adminPassword) {
+    const access_token = signM2MToken({ sub: "admin", email, role: "admin" });
+    const refresh_token = signM2MToken({ sub: "admin", email, type: "refresh", role: "admin" }, "7d");
+    return { access_token, refresh_token, token_type: "bearer" };
+  }
 
   try {
     // Look up user in app_users table
