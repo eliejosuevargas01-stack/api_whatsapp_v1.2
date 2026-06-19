@@ -17,7 +17,7 @@ import {
 } from "./instagramManager.js";
 import https from "node:https";
 import crypto from "node:crypto";
-import bcrypt from "bcrypt";
+import bcrypt from "bcrypt"; // added for client_secret hashing with Bcrypt
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import dotenv from "dotenv";
