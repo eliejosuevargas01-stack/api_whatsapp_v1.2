@@ -340,53 +340,70 @@ app.get("/api/bootstrap", async () => ({
 }));
 
 app.post("/api/auth/login", async (request, reply) => {
-  const { username, password } = request.body || {};
-  if (!username || !password) {
+  const { email, password } = request.body || {};
+  if (!email || !password) {
     return reply.code(400).send({
       error: "bad_request",
       message: "Por favor, informe e-mail e senha.",
     });
   }
 
-  // Admin login
-  if (username === config.adminUsername && password === config.adminPassword) {
-    const payload = {
-      username: config.adminUsername,
-      role: "admin",
-      exp: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
-    };
-    const access_token = signJwt(payload, config.jwtSecret);
-    const refresh_token = "admin_refresh_token_secret_xyz";
-    return { access_token, refresh_token, token_type: "bearer" };
-  }
-
-  // M2M client login via client_credentials table
   try {
+    // Look up user in app_users table
     const result = await query(
-      "SELECT client_secret_hash, external_user_id FROM client_credentials WHERE client_id = $1",
-      [username]
+      "SELECT id, user_id, username, password_hash FROM app_users WHERE username = $1",
+      [email]
     );
     if (result.rowCount === 0) {
-      return reply.code(401).send({ error: "invalid_client", message: "Client not found" });
+      return reply.code(401).send({ error: "invalid_credentials", message: "E-mail ou senha inválidos." });
     }
-    const { client_secret_hash, external_user_id } = result.rows[0];
-    const isValid = await bcrypt.compare(password, client_secret_hash);
+
+    const user = result.rows[0];
+    const isValid = await bcrypt.compare(password, user.password_hash);
     if (!isValid) {
-      return reply.code(401).send({ error: "invalid_client", message: "Invalid secret" });
+      return reply.code(401).send({ error: "invalid_credentials", message: "E-mail ou senha inválidos." });
     }
-    const token = signM2MToken({ sub: username, external_user_id });
-    return { access_token: token, token_type: "bearer" };
+
+    // Generate tokens using RSA (same as provision/M2M)
+    const access_token = signM2MToken({ sub: user.user_id, email, role: "user" });
+    const refresh_token = signM2MToken({ sub: user.user_id, email, type: "refresh" }, "7d");
+
+    return { access_token, refresh_token, token_type: "bearer" };
   } catch (err) {
     app.log.error(err);
-    return reply.code(500).send({ error: "server_error", message: "Unable to process request" });
+    return reply.code(500).send({ error: "server_error", message: "Erro interno ao processar login." });
   }
 });
+
+// Register a new user
+app.post("/api/auth/register", async (request, reply) => {
+  const { email, password } = request.body || {};
+  if (!email || !password) {
+    return reply.code(400).send({ error: "bad_request", message: "Email e senha são obrigatórios." });
+  }
+
+  const passwordHash = await bcrypt.hash(password, 12);
+  try {
+    const result = await query(
+      `INSERT INTO app_users (username, password_hash) VALUES ($1, $2) RETURNING id, user_id, username, created_at`,
+      [email, passwordHash]
+    );
+    return { ok: true, user: result.rows[0] };
+  } catch (err) {
+    app.log.error(err);
+    if (err.code === "23505") {
+      return reply.code(409).send({ error: "conflict", message: "E-mail já cadastrado." });
+    }
+    return reply.code(500).send({ error: "server_error", message: "Erro ao criar usuário." });
+  }
+});
+
+// Provision client credentials (Dominus sends email + password, receives client_id + client_secret)
 app.post("/api/v1/clients/provision", async (request, reply) => {
   const { email, password } = request.body || {};
   if (!email || !password) {
     return reply.code(400).send({ error: "bad_request", message: "Email and password required." });
   }
-  // generate secret and hash it
   const clientSecret = crypto.randomBytes(32).toString("hex");
   const clientSecretHash = await bcrypt.hash(clientSecret, 12);
   try {
@@ -414,45 +431,17 @@ app.post("/api/auth/refresh", async (request, reply) => {
     });
   }
 
-  if (refresh_token === "admin_refresh_token_secret_xyz") {
-    const payload = {
-      username: config.adminUsername,
-      role: "admin",
-      exp: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
-    };
-    const access_token = signJwt(payload, config.jwtSecret);
-    return { access_token, refresh_token: "admin_refresh_token_secret_xyz", token_type: "bearer" };
-  }
-
-  // M2M token refresh handling
   try {
     const decoded = verifyM2MToken(refresh_token);
-    // Here you could implement token rotation if needed
-    const newAccess = signM2MToken({ sub: decoded.sub, external_user_id: decoded.external_user_id });
-    return { access_token: newAccess, token_type: "bearer" };
-  } catch (e) {
-    // Fallback to CRM refresh
-    try {
-      const response = await fetch(`${config.crmApiUrl}/api/v1/auth/refresh`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_token }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        return reply.code(response.status).send({
-          error: data.error || "refresh_failed",
-          message: data.detail || data.message || "Token de atualização inválido ou expirado.",
-        });
-      }
-      return data;
-    } catch (error) {
-      app.log.error(error, "Erro ao conectar com a API de Refresh do CRM");
-      return reply.code(500).send({
-        error: "connection_error",
-        message: "Não foi possível conectar ao servidor de autenticação central del CRM.",
-      });
+    if (decoded.type !== "refresh") {
+      return reply.code(401).send({ error: "invalid_token", message: "Token não é um refresh token." });
     }
+    const access_token = signM2MToken({ sub: decoded.sub, email: decoded.email, role: decoded.role || "user" });
+    const new_refresh = signM2MToken({ sub: decoded.sub, email: decoded.email, type: "refresh" }, "7d");
+    return { access_token, refresh_token: new_refresh, token_type: "bearer" };
+  } catch (e) {
+    app.log.error(e, "Erro ao renovar token");
+    return reply.code(401).send({ error: "invalid_token", message: "Token inválido ou expirado." });
   }
 });
 
@@ -464,7 +453,7 @@ app.get("/api/status", async () => ({
 
 // Global M2M authentication middleware
 app.addHook("preHandler", async (request, reply) => {
-  const publicPaths = ["/", "/api/health", "/api/bootstrap", "/api/auth/login", "/api/auth/refresh", "/oauth/token"]; // add more if needed
+  const publicPaths = ["/", "/api/health", "/api/bootstrap", "/api/auth/login", "/api/auth/register", "/api/auth/refresh", "/api/v1/clients/provision", "/oauth/token"];
   if (publicPaths.some(p => request.raw.url.startsWith(p))) return;
   const token = getRequestToken(request);
   if (!token) {
