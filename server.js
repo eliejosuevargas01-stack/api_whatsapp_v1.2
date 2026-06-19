@@ -317,14 +317,14 @@ function buildSessionId(name, token) {
   if (!token || isAdminToken(token)) return name;
   const prefix = getUserPrefix(token);
   if (prefix === "admin") return name;
-  return `${prefix}_${name}`;
+  return `${prefix}-${name}`;
 }
 
 function getFriendlySessionName(sessionId) {
   if (!sessionId) return "";
-  const parts = sessionId.split("_");
+  const parts = sessionId.split("-");
   if (parts.length > 1 && parts[0].length === 8 && /^[0-9a-f]{8}$/i.test(parts[0])) {
-    return parts.slice(1).join("_");
+    return parts.slice(1).join("-");
   }
   return sessionId;
 }
@@ -665,10 +665,10 @@ app.addHook("preHandler", async (request, reply) => {
       return reply.code(401).send({ error: "unauthorized", message: "Token inválido ou ausente." });
     }
 
-    const prefixString = `${prefix}_`;
+    const prefixString = `${prefix}-`;
     let resolvedSessionId = targetSessionId;
     if (!targetSessionId.startsWith(prefixString)) {
-      if (/^[0-9a-f]{8}_/i.test(targetSessionId)) {
+      if (/^[0-9a-f]{8}-/i.test(targetSessionId)) {
         return reply.code(403).send({ error: "forbidden", message: "Acesso negado a esta sessão." });
       }
       resolvedSessionId = `${prefixString}${targetSessionId}`;
@@ -854,8 +854,7 @@ app.get("/api/sessions", async (request, reply) => {
         return meta && meta.recipient === recipient;
       });
     }
-  } else if (prefix !== "anon") {
-    const prefixString = `${prefix}_`;
+    const prefixString = `${prefix}-`;
     allSessions = allSessions.filter(s => {
       return s.id && s.id.startsWith(prefixString);
     });
