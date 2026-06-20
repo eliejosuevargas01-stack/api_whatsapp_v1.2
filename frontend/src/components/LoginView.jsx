@@ -74,10 +74,10 @@ export default function LoginView({ onLoginSuccess }) {
             marginBottom: '8px',
             letterSpacing: '-0.03em'
           }}>
-            OmniConnect
+            Whats Api
           </div>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.925rem' }}>
-            Gerenciador de Sessões unificado da Dominuslabs
+            Gerenciador de WhatsApp API da Dominuslabs
           </p>
         </div>
 
@@ -183,7 +183,7 @@ export default function LoginView({ onLoginSuccess }) {
           fontSize: '0.75rem',
           color: 'var(--text-muted)'
         }}>
-          OmniConnect &copy; 2026. Acesso restrito a administradores.
+          Whats Api &copy; 2026. Acesso restrito.
         </div>
       </div>
     </div>

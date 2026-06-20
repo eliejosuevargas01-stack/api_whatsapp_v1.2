@@ -24,14 +24,13 @@ const Instagram = ({ size = 24, ...props }) => (
 export default function NavigationRail({ activeTab, setActiveTab, theme, onToggleTheme, onLogout }) {
   const tabs = [
     { id: 'whatsapp', name: 'WhatsApp', icon: MessageSquare },
-    { id: 'instagram', name: 'Instagram', icon: Instagram },
     { id: 'sessions', name: 'Sessões & Webhooks', icon: Settings },
   ];
 
   return (
     <div className="nav-rail">
-      <div className="nav-logo" title="OmniConnect">
-        <span>OC</span>
+      <div className="nav-logo" title="Whats Api">
+        <span>WA</span>
       </div>
 
       <nav className="nav-items">
