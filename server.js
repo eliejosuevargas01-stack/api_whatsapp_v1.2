@@ -340,7 +340,8 @@ function getRequestToken(request) {
 
 async function comparePasswords(plainPassword, storedPasswordOrHash) {
   if (!storedPasswordOrHash) return false;
-  // Se parece ser um hash bcrypt (começa com $2a$, $2b$ ou $2y$)
+
+  // 1. Verificar se é hash Bcrypt (começa com $2a$, $2b$ ou $2y$)
   if (/^\$2[aby]\$/.test(storedPasswordOrHash)) {
     try {
       return await bcrypt.compare(plainPassword, storedPasswordOrHash);
@@ -348,6 +349,26 @@ async function comparePasswords(plainPassword, storedPasswordOrHash) {
       return plainPassword === storedPasswordOrHash;
     }
   }
+
+  // 2. Verificar se é no formato do Dominus (salt:hash de 64 caracteres em PBKDF2 HMAC-SHA256)
+  if (storedPasswordOrHash.includes(":")) {
+    const parts = storedPasswordOrHash.split(":");
+    if (parts.length === 2) {
+      const [salt, hash] = parts;
+      if (salt.length > 0 && hash.length === 64) {
+        try {
+          const derivedKey = crypto.pbkdf2Sync(plainPassword, salt, 100000, 32, "sha256").toString("hex");
+          if (derivedKey === hash) {
+            return true;
+          }
+        } catch (e) {
+          // ignore and fallback
+        }
+      }
+    }
+  }
+
+  // 3. Fallback de comparação direta
   return plainPassword === storedPasswordOrHash;
 }
 
