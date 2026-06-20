@@ -332,6 +332,9 @@ function getRequestToken(request) {
       token = parts[1];
     }
   }
+  if (!token && request.body) {
+    token = request.body.authToken || request.body.token;
+  }
   return token ? String(token).trim() : null;
 }
 
