@@ -335,6 +335,19 @@ function getRequestToken(request) {
   return token ? String(token).trim() : null;
 }
 
+async function comparePasswords(plainPassword, storedPasswordOrHash) {
+  if (!storedPasswordOrHash) return false;
+  // Se parece ser um hash bcrypt (começa com $2a$, $2b$ ou $2y$)
+  if (/^\$2[aby]\$/.test(storedPasswordOrHash)) {
+    try {
+      return await bcrypt.compare(plainPassword, storedPasswordOrHash);
+    } catch (e) {
+      return plainPassword === storedPasswordOrHash;
+    }
+  }
+  return plainPassword === storedPasswordOrHash;
+}
+
 
 
 app.register(rateLimit, {
@@ -391,7 +404,7 @@ app.post("/api/auth/login", async (request, reply) => {
 
     if (result.rowCount > 0) {
       const user = result.rows[0];
-      const isValid = await bcrypt.compare(password, user.password_hash);
+      const isValid = await comparePasswords(password, user.password_hash);
       if (!isValid) {
         return reply.code(401).send({ error: "invalid_credentials", message: "E-mail ou senha inválidos." });
       }
@@ -471,23 +484,22 @@ app.post("/api/v1/clients/provision", async (request, reply) => {
     return reply.code(400).send({ error: "bad_request", message: "Email and password required." });
   }
 
-  console.log(`[M2M Provision] Recebendo credenciais do usuário para provisionamento: email = "${email}"`);
+  console.log(`[M2M Provision] Recebendo credenciais do usuário para provisionamento: email = "${email}", password_len = ${password?.length}, is_hex = ${/^[0-9a-f]+$/i.test(password)}`);
 
   try {
-    // 1. Criar ou atualizar usuário correspondente na tabela app_users
+    // 1. Criar ou atualizar usuário correspondente na tabela app_users (salvar a senha íntegra sem fazer hash, a pedido do usuário)
     const userResult = await query("SELECT id FROM app_users WHERE username = $1", [email]);
-    const passwordHash = await bcrypt.hash(password, 12);
     if (userResult.rowCount === 0) {
-      console.log(`[M2M Provision] Criando novo usuário correspondente na tabela app_users para "${email}"...`);
+      console.log(`[M2M Provision] Criando novo usuário correspondente na tabela app_users para "${email}" com a senha íntegra...`);
       await query(
         `INSERT INTO app_users (username, password_hash) VALUES ($1, $2)`,
-        [email, passwordHash]
+        [email, password]
       );
     } else {
-      console.log(`[M2M Provision] Usuário já cadastrado em app_users. Atualizando a senha para manter sincronizado...`);
+      console.log(`[M2M Provision] Usuário já cadastrado em app_users. Atualizando a senha íntegra para manter sincronizado...`);
       await query(
         `UPDATE app_users SET password_hash = $1 WHERE username = $2`,
-        [passwordHash, email]
+        [password, email]
       );
     }
 
@@ -522,6 +534,7 @@ app.post("/api/v1/clients/me", async (request, reply) => {
   if (!email || !password) {
     return reply.code(400).send({ error: "bad_request", message: "Email and password required." });
   }
+  console.log(`[M2M Client Me] Recebendo solicitação de chaves: email = "${email}", password_len = ${password?.length}, is_hex = ${/^[0-9a-f]+$/i.test(password)}`);
   try {
     // 1. Validar a senha do usuário contra a tabela app_users
     const userResult = await query(
@@ -534,7 +547,7 @@ app.post("/api/v1/clients/me", async (request, reply) => {
     }
 
     const user = userResult.rows[0];
-    const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+    const isPasswordValid = await comparePasswords(password, user.password_hash);
     if (!isPasswordValid) {
       console.warn(`[M2M Client Me] Tentativa de obter chaves falhou: Senha inválida em app_users para "${email}"`);
       return reply.code(401).send({ error: "unauthorized", message: "Invalid email or password." });
@@ -594,20 +607,19 @@ app.post("/api/v1/clients/reprovision", async (request, reply) => {
   console.log(`[M2M Reprovision] Recebendo solicitação de reprovisionamento M2M para o email: email = "${email}"`);
 
   try {
-    // 1. Criar ou atualizar usuário correspondente na tabela app_users
+    // 1. Criar ou atualizar usuário correspondente na tabela app_users (salvar a senha íntegra sem fazer hash, a pedido do usuário)
     const userResult = await query("SELECT id FROM app_users WHERE username = $1", [email]);
-    const passwordHash = await bcrypt.hash(password, 12);
     if (userResult.rowCount === 0) {
-      console.log(`[M2M Reprovision] Criando novo usuário correspondente na tabela app_users para "${email}"...`);
+      console.log(`[M2M Reprovision] Criando novo usuário correspondente na tabela app_users para "${email}" com a senha íntegra...`);
       await query(
         `INSERT INTO app_users (username, password_hash) VALUES ($1, $2)`,
-        [email, passwordHash]
+        [email, password]
       );
     } else {
-      console.log(`[M2M Reprovision] Atualizando a senha em app_users para "${email}"...`);
+      console.log(`[M2M Reprovision] Atualizando a senha íntegra em app_users para "${email}"...`);
       await query(
         `UPDATE app_users SET password_hash = $1 WHERE username = $2`,
-        [passwordHash, email]
+        [password, email]
       );
     }
 
