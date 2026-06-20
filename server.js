@@ -333,7 +333,7 @@ function getRequestToken(request) {
     }
   }
   if (!token && request.body) {
-    token = request.body.authToken || request.body.token;
+    token = request.body.authToken || request.body.token || request.body.whatsapp_token;
   }
   return token ? String(token).trim() : null;
 }
