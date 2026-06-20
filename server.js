@@ -3,18 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { EventEmitter } from "node:events";
-import {
-  loginInstagram,
-  sendInstagramMessage,
-  igEmitter,
-  logoutInstagram,
-  resolveInstagramChallenge,
-  initInstagramSessions,
-  getInstagramSessionsList,
-  getInstagramConversations,
-  getInstagramThreadMessages,
-  sendInstagramThreadMessage
-} from "./instagramManager.js";
 import https from "node:https";
 import crypto from "node:crypto";
 import bcrypt from "bcrypt"; // added for client_secret hashing with Bcrypt
@@ -365,10 +353,6 @@ app.get("/", async (request, reply) =>
 
 app.get("/sessoes", async (request, reply) =>
   reply.header("Cache-Control", "no-store").sendFile("sessions.html"),
-);
-
-app.get("/instagram.html", async (request, reply) =>
-  reply.header("Cache-Control", "no-store").sendFile("instagram.html"),
 );
 
 app.get("/api/health", async () => ({
@@ -913,16 +897,6 @@ app.put("/api/settings", async (request, reply) => {
 
 app.get("/api/sessions/:sessionId/settings", async (request, reply) => {
   const { sessionId } = request.params;
-  const isInstagram = (await getInstagramSessionsList()).some(s => s.id === sessionId);
-
-  if (isInstagram) {
-    ensureSessionMeta(stores.sessions, sessionId);
-    return {
-      settings: {
-        webhook: getSessionWebhookSettings(stores.sessions, sessionId),
-      },
-    };
-  }
 
   if (!sessionManager.hasSession(sessionId)) {
     return reply.code(404).send({
@@ -940,33 +914,6 @@ app.get("/api/sessions/:sessionId/settings", async (request, reply) => {
 
 app.put("/api/sessions/:sessionId/settings", async (request, reply) => {
   const { sessionId } = request.params;
-  const isInstagram = (await getInstagramSessionsList()).some(s => s.id === sessionId);
-
-  if (isInstagram) {
-    try {
-      const session = ensureSessionMeta(stores.sessions, sessionId);
-      session.webhook = mergeSettingsStore(
-        {
-          webhook: session.webhook || cloneWebhookSettings(stores.settings.webhook),
-        },
-        request.body,
-      ).webhook;
-
-      await persistSessions();
-
-      return {
-        ok: true,
-        settings: {
-          webhook: getSessionWebhookSettings(stores.sessions, sessionId),
-        },
-      };
-    } catch (error) {
-      return reply.code(400).send({
-        error: "bad_request",
-        message: errorToMessage(error) || "Nao foi possivel salvar as configuracoes da sessao.",
-      });
-    }
-  }
 
   if (!sessionManager.hasSession(sessionId)) {
     return reply.code(404).send({
@@ -1005,27 +952,7 @@ app.get("/api/sessions", async (request, reply) => {
   const recipient = request.query?.recipient ? String(request.query.recipient).trim() : null;
 
   const whatsappSessions = sessionManager.listSessions();
-  let instagramSessions = [];
-  try {
-    instagramSessions = await getInstagramSessionsList();
-  } catch (error) {
-    app.log.error(error, "Falha ao obter lista de sessoes do Instagram.");
-  }
-
-  let allSessions = [
-    ...whatsappSessions.map((s) => ({ ...s, platform: "whatsapp" })),
-    ...instagramSessions.map((s) => ({
-      id: s.id,
-      name: s.name,
-      platform: "instagram",
-      snapshot: { status: s.active ? "connected" : "disconnected" },
-      stats: {
-        conversationCount: 0,
-        messageCount: 0,
-        unreadCount: 0,
-      },
-    })),
-  ];
+  let allSessions = whatsappSessions.map((s) => ({ ...s, platform: "whatsapp" }));
 
   const isMaster = config.masterApiKey && reqToken === config.masterApiKey;
   const adminTokenResult = isAdminToken(reqToken);
@@ -1213,22 +1140,6 @@ app.post("/api/sessions/:sessionId/disconnect", async (request, reply) => {
 
 app.delete("/api/sessions/:sessionId", async (request, reply) => {
   const { sessionId } = request.params;
-  const isInstagram = (await getInstagramSessionsList()).some(s => s.id === sessionId);
-
-  if (isInstagram) {
-    try {
-      await logoutInstagram(sessionId);
-      return {
-        ok: true,
-        removedSessionId: sessionId,
-      };
-    } catch (error) {
-      return reply.code(400).send({
-        error: "bad_request",
-        message: error.message || "Nao foi possivel excluir a sessao do Instagram.",
-      });
-    }
-  }
 
   if (!sessionManager.hasSession(sessionId)) {
     return reply.code(404).send({
@@ -1246,22 +1157,6 @@ app.delete("/api/sessions/:sessionId", async (request, reply) => {
 
 app.post("/api/sessions/:sessionId/logout", async (request, reply) => {
   const { sessionId } = request.params;
-  const isInstagram = (await getInstagramSessionsList()).some(s => s.id === sessionId);
-
-  if (isInstagram) {
-    try {
-      await logoutInstagram(sessionId);
-      return {
-        ok: true,
-        snapshot: { status: "disconnected" },
-      };
-    } catch (error) {
-      return reply.code(400).send({
-        error: "bad_request",
-        message: error.message || "Nao foi possivel desconectar a sessao do Instagram.",
-      });
-    }
-  }
 
   if (!sessionManager.hasSession(sessionId)) {
     return reply.code(404).send({
@@ -1415,375 +1310,10 @@ app.post("/api/sessions/:sessionId/conversations/:jid/read", async (request, rep
   };
 });
 
-const dispatchInstagramWebhookMessage = async (sessionId, threadId, threadTitle, message, webhook) => {
-  const payload = {
-    event: "message.created",
-    emittedAt: new Date().toISOString(),
-    platform: "instagram",
-    session: {
-      id: sessionId,
-      name: sessionId,
-    },
-    conversation: {
-      jid: threadId,
-      displayJid: threadId,
-      title: threadTitle || "Conversa Instagram",
-      kind: "private",
-      updatedAt: Date.now(),
-      unreadCount: 0,
-      preview: message.text || "",
-      lastMessageAt: Date.now(),
-      messageCount: 0,
-    },
-    message: {
-      id: `ig_${sessionId}_${threadId}_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-      jid: threadId,
-      resolvedJid: threadId,
-      displayJid: threadId,
-      fromMe: Boolean(message.fromMe),
-      text: message.text || "",
-      timestamp: Math.floor(message.timestamp || Date.now() / 1000),
-      type: "text",
-      status: "received",
-      pushName: threadTitle || "Conversa Instagram",
-      participant: null,
-      participantDisplayJid: null,
-      media: null,
-    },
-  };
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => {
-    controller.abort();
-  }, 10000);
-
-  try {
-    const response = await fetch(webhook.url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Instagram-Event": payload.event,
-        "X-Instagram-Session": sessionId,
-        "X-WhatsApp-Event": payload.event, // compatibilidade
-        "X-WhatsApp-Session": sessionId,   // compatibilidade
-        ...(webhook.secret ? { "X-Webhook-Secret": webhook.secret } : {}),
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      app.log.warn(
-        {
-          sessionId,
-          statusCode: response.status,
-          webhookUrl: webhook.url,
-        },
-        "Instagram Webhook respondeu com status nao esperado.",
-      );
-    }
-  } catch (error) {
-    app.log.warn({ error, sessionId, webhookUrl: webhook.url }, "Falha ao entregar Instagram webhook.");
-  } finally {
-    clearTimeout(timeout);
-  }
-};
-
-// Listener para mensagens do Instagram
-igEmitter.on('message', (data) => {
-  const { sessionId, threadId, threadTitle, message } = data;
-  app.log.info({ sessionId, threadId, message }, 'Nova mensagem recebida do Instagram');
-
-  const webhook = getSessionWebhookSettings(stores.sessions, sessionId);
-  if (!webhook.enabled || !webhook.url) {
-    return;
-  }
-
-  if (message.fromMe && !webhook.includeFromMe) {
-    return;
-  }
-
-  void dispatchInstagramWebhookMessage(sessionId, threadId, threadTitle, message, webhook);
-});
-
-function getNewMessages(cachedList, scrapedList) {
-  if (!cachedList || cachedList.length === 0) {
-    return scrapedList;
-  }
-  for (let i = scrapedList.length; i >= 0; i--) {
-    if (i <= cachedList.length) {
-      let match = true;
-      for (let j = 0; j < i; j++) {
-        const cachedItem = cachedList[cachedList.length - i + j];
-        const scrapedItem = scrapedList[j];
-        if (cachedItem.text !== scrapedItem.text || cachedItem.fromMe !== scrapedItem.fromMe) {
-          match = false;
-          break;
-        }
-      }
-      if (match) {
-        return scrapedList.slice(i);
-      }
-    }
-  }
-  return scrapedList;
-}
-
-const activeScrapes = new Set();
-const instagramMessageCache = new Map();
-
-async function runScrapeForSession(username) {
-  app.log.debug(`[Instagram-Scraper] Iniciando raspagem de inbox para @${username}`);
-  try {
-    const conversations = await getInstagramConversations(username);
-
-    for (const convo of conversations) {
-      const threadId = convo.jid;
-      const cacheKey = `${username}:${threadId}`;
-      const hasUnread = convo.unreadCount > 0;
-
-      let cached = instagramMessageCache.get(cacheKey);
-      let shouldFetch = false;
-
-      if (!cached) {
-        shouldFetch = true;
-      } else if (hasUnread) {
-        shouldFetch = true;
-      } else {
-        const lastCachedMsg = cached[cached.length - 1];
-        if (lastCachedMsg && convo.preview && lastCachedMsg.text !== convo.preview) {
-          shouldFetch = true;
-        }
-      }
-
-      if (shouldFetch) {
-        app.log.debug(`[Instagram-Scraper] Buscando mensagens do thread ${threadId} para @${username}`);
-        const scrapedMessages = await getInstagramThreadMessages(username, threadId);
-
-        if (!cached) {
-          instagramMessageCache.set(cacheKey, scrapedMessages);
-          app.log.debug(`[Instagram-Scraper] Cache semeado com ${scrapedMessages.length} mensagens para @${username} (thread: ${threadId})`);
-          continue;
-        }
-
-        const newMessages = getNewMessages(cached, scrapedMessages);
-        instagramMessageCache.set(cacheKey, scrapedMessages);
-
-        for (const msg of newMessages) {
-          app.log.info(`[Instagram-Scraper] Nova mensagem detectada em @${username} (thread: ${threadId}): ${msg.text}`);
-          igEmitter.emit('message', {
-            sessionId: username,
-            threadId: threadId,
-            threadTitle: convo.title,
-            message: msg
-          });
-        }
-      }
-    }
-  } catch (error) {
-    app.log.warn({ error, username }, `Erro ao raspar inbox do Instagram para @${username}`);
-  }
-}
-
-async function pollInstagramSessions() {
-  let sessions = [];
-  try {
-    sessions = await getInstagramSessionsList();
-  } catch (error) {
-    app.log.error(error, "Erro ao obter lista de sessoes para polling do Instagram.");
-    return;
-  }
-
-  const activeSessions = sessions.filter((s) => s.active);
-
-  for (const session of activeSessions) {
-    const username = session.id;
-    if (activeScrapes.has(username)) {
-      continue;
-    }
-
-    activeScrapes.add(username);
-    runScrapeForSession(username).finally(() => {
-      activeScrapes.delete(username);
-    });
-  }
-}
-
-app.post("/api/instagram/login", async (request, reply) => {
-  const username = request.body?.username;
-  const password = request.body?.password;
-  const token = request.body?.authToken || request.body?.token ? String(request.body.authToken || request.body.token).trim() : null;
-
-  if (!username || !password) {
-    return reply.code(400).send({ error: "bad_request", message: "Informe username e password." });
-  }
-
-  try {
-    const session = await loginInstagram(username, password);
-    if (token) {
-      ensureSessionMeta(stores.sessions, username, { token });
-      await persistSessions();
-    }
-    return { ok: true, session };
-  } catch (error) {
-    return reply.code(400).send({ error: "login_failed", message: error.message, isCheckpoint: error.isCheckpoint });
-  }
-});
-
-app.post("/api/instagram/challenge", async (request, reply) => {
-  const username = request.body?.username;
-  const code = request.body?.code;
-
-  if (!username || !code) {
-    return reply.code(400).send({ error: "bad_request", message: "Informe username e o codigo." });
-  }
-
-  try {
-    const result = await resolveInstagramChallenge(username, code);
-    return { ok: true, message: result.message };
-  } catch (error) {
-    return reply.code(400).send({ error: "challenge_failed", message: error.message });
-  }
-});
-
-app.post("/api/instagram/send", async (request, reply) => {
-  const sessionId = request.body?.sessionId; // que no caso é o username do bot logado
-  const usernameTo = request.body?.usernameTo;
-  const text = request.body?.text;
-
-  if (!sessionId || !usernameTo || !text) {
-    return reply.code(400).send({ error: "bad_request", message: "Informe sessionId, usernameTo e text." });
-  }
-
-  try {
-    const result = await sendInstagramMessage(sessionId, usernameTo, text);
-    return { ok: true, result };
-  } catch (error) {
-    return reply.code(400).send({ error: error.errorCode || "send_failed", message: error.message, isCheckpoint: error.isCheckpoint });
-  }
-});
-
-app.get("/api/instagram/sessions", async (request, reply) => {
-  try {
-    const sessions = await getInstagramSessionsList();
-    const reqToken = getRequestToken(request);
-    
-    let filteredSessions = sessions;
-    if (config.masterApiKey && reqToken === config.masterApiKey) {
-      // Master can see all
-    } else if (reqToken) {
-      filteredSessions = sessions.filter(s => {
-        const meta = stores.sessions.sessions[s.id];
-        return meta && meta.token === reqToken;
-      });
-    } else {
-      filteredSessions = sessions.filter(s => {
-        const meta = stores.sessions.sessions[s.id];
-        return !meta || !meta.token;
-      });
-    }
-    
-    return { sessions: filteredSessions };
-  } catch (error) {
-    return reply.code(500).send({ error: "server_error", message: error.message });
-  }
-});
-
-app.post("/api/instagram/sessions/:username/logout", async (request, reply) => {
-  const { username } = request.params;
-  try {
-    await logoutInstagram(username);
-    return { ok: true };
-  } catch (error) {
-    return reply.code(400).send({ error: "logout_failed", message: error.message });
-  }
-});
-
-app.get("/api/instagram/sessions/:username/conversations", async (request, reply) => {
-  const { username } = request.params;
-  try {
-    const conversations = await getInstagramConversations(username);
-    return { conversations };
-  } catch (error) {
-    return reply.code(400).send({ error: "bad_request", message: error.message, isCheckpoint: error.isCheckpoint });
-  }
-});
-
-app.get("/api/instagram/sessions/:username/conversations/:threadId/messages", async (request, reply) => {
-  const { username, threadId } = request.params;
-  try {
-    const messages = await getInstagramThreadMessages(username, threadId);
-    return {
-      conversation: { title: "Conversa Instagram", jid: threadId },
-      messages
-    };
-  } catch (error) {
-    return reply.code(400).send({ error: "bad_request", message: error.message, isCheckpoint: error.isCheckpoint });
-  }
-});
-
-app.post("/api/instagram/sessions/:username/conversations/:threadId/messages/send", async (request, reply) => {
-  const { username, threadId } = request.params;
-  const text = String(request.body?.text || "").trim();
-  
-  if (!text) {
-    return reply.code(400).send({ error: "bad_request", message: "Informe o texto da mensagem." });
-  }
-  
-  try {
-    const result = await sendInstagramThreadMessage(username, threadId, text);
-    return { ok: true, result };
-  } catch (error) {
-    return reply.code(400).send({ error: "send_failed", message: error.message, isCheckpoint: error.isCheckpoint });
-  }
-});
+// Instagram integration removed
 
 app.post("/api/sessions/:sessionId/messages/send", async (request, reply) => {
   const { sessionId } = request.params;
-  const isInstagram = (await getInstagramSessionsList()).some(s => s.id === sessionId);
-
-  if (isInstagram) {
-    let target = String(request.body?.jid || request.body?.link || "").trim();
-    const text = String(request.body?.text || "").trim();
-    if (!target || !text) {
-      return reply.code(400).send({
-        error: "bad_request",
-        message: "Informe o destinatario (jid) e a mensagem (text).",
-      });
-    }
-
-    if (target.startsWith("@")) {
-      target = target.substring(1);
-    }
-
-    try {
-      let result;
-      const isThreadId = /^\d+$/.test(target);
-      if (isThreadId) {
-        result = await sendInstagramThreadMessage(sessionId, target, text);
-      } else {
-        result = await sendInstagramMessage(sessionId, target, text);
-      }
-      return {
-        ok: true,
-        message: {
-          id: `ig_sent_${Date.now()}`,
-          jid: target,
-          fromMe: true,
-          text,
-          timestamp: Math.floor(Date.now() / 1000),
-          type: "text",
-        },
-        result
-      };
-    } catch (error) {
-      return reply.code(400).send({
-        error: "send_failed",
-        message: error.message,
-        isCheckpoint: error.isCheckpoint,
-      });
-    }
-  }
 
   let jid = String(request.body?.jid || "").trim();
   const link = String(request.body?.link || "").trim();
@@ -2310,20 +1840,7 @@ try {
 
   if (config.autoConnect) {
     void sessionManager.autoConnectExistingSessions();
-    try {
-      await initInstagramSessions(config.sessionsDir);
-    } catch (igError) {
-      app.log.error({ error: igError }, "Falha ao restaurar sessoes do Instagram.");
-    }
   }
-
-  // Start Instagram background polling loop
-  setTimeout(() => {
-    void pollInstagramSessions();
-  }, 5000);
-  setInterval(() => {
-    void pollInstagramSessions();
-  }, 30000);
 } catch (error) {
   app.log.error({ error }, "Falha ao iniciar o servidor.");
   process.exit(1);

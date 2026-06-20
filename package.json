@@ -19,11 +19,9 @@
     "bcrypt": "^5.1.1",
     "dotenv": "^16.4.5",
     "fastify": "^4.28.1",
-    "instagram-private-api": "^1.46.1",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.21.0",
     "pino": "^9.3.2",
-    "puppeteer": "^24.43.1",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
