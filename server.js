@@ -854,7 +854,10 @@ app.addHook("preHandler", async (request, reply) => {
       if (/^[0-9a-f]{8}-/i.test(targetSessionId)) {
         return reply.code(403).send({ error: "forbidden", message: "Acesso negado a esta sessão." });
       }
-      resolvedSessionId = `${prefixString}${targetSessionId}`;
+      resolvedSessionId = `${prefixString}${slugify(targetSessionId)}`;
+    } else {
+      const friendlyPart = targetSessionId.substring(prefixString.length);
+      resolvedSessionId = `${prefixString}${slugify(friendlyPart)}`;
     }
 
     if (request.params && request.params.sessionId) {
