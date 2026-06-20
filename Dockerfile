@@ -15,6 +15,7 @@ COPY jwt.js ./
 COPY public ./public
 COPY migrations ./migrations
 COPY scripts ./scripts
+COPY keys ./keys
 
 RUN mkdir -p /app/data /app/sessions
 
