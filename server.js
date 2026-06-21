@@ -835,6 +835,13 @@ app.addHook("preHandler", async (request, reply) => {
   if (!token) {
     return reply.code(401).send({ error: "unauthorized", message: "Missing token" });
   }
+
+  // Permite autenticação direta com o MASTER_API_KEY
+  if (config.masterApiKey && token === config.masterApiKey) {
+    request.user = { role: "admin", sub: "admin", email: config.adminUsername };
+    return;
+  }
+
   try {
     const payload = verifyM2MToken(token);
     request.user = payload;
