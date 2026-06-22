@@ -288,11 +288,15 @@ export default function InstagramTab({ sessions, onRefreshSessions, selectedSess
             {instagramSessions.length === 0 ? (
               <option value="">Nenhuma conta do Instagram</option>
             ) : (
-              instagramSessions.map((session) => (
-                <option key={session.id} value={session.id}>
-                  @{session.name} • {session.snapshot?.status === 'connected' ? 'Ativa' : 'Inativa'}
-                </option>
-              ))
+              instagramSessions.map((session) => {
+                const nameMatch = String(session.name).match(/^[0-9a-f]{8}[-\s]+(.+)$/i);
+                const displayName = nameMatch ? nameMatch[1] : session.name;
+                return (
+                  <option key={session.id} value={session.id}>
+                    @{displayName} • {session.snapshot?.status === 'connected' ? 'Ativa' : 'Inativa'}
+                  </option>
+                );
+              })
             )}
           </select>
         </div>
@@ -472,7 +476,10 @@ export default function InstagramTab({ sessions, onRefreshSessions, selectedSess
                   ) : (
                     <div className="inactive-session-alert">
                       <AlertCircle size={48} className="alert-icon" />
-                      <h3>Sessão de @{selectedSession.name} Inativa</h3>
+                      <h3>Sessão de @{(() => {
+                        const nameMatch = String(selectedSession.name).match(/^[0-9a-f]{8}[-\s]+(.+)$/i);
+                        return nameMatch ? nameMatch[1] : selectedSession.name;
+                      })()} Inativa</h3>
                       <p>Para enviar DMs, a conta do Instagram precisa estar ativa. Por favor, reconecte-a na aba de Sessões.</p>
                     </div>
                   )}

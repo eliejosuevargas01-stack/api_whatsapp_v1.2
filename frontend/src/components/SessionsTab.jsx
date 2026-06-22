@@ -2,6 +2,33 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Plus, RefreshCw, Power, LogOut, Trash2, Save, Settings, Shield } from 'lucide-react';
 import { apiRequest, formatStatus } from '../shared/api';
 
+export function parseSessionInfo(sessionId, sessionName) {
+  if (!sessionId) return { userHash: null, friendlyId: '', friendlyName: '', isNamespaced: false };
+  const match = String(sessionId).match(/^([0-9a-f]{8})-(.+)$/i);
+  if (match) {
+    const userHash = match[1];
+    const friendlyId = match[2];
+    
+    let friendlyName = sessionName || '';
+    const nameMatch = String(sessionName).match(/^[0-9a-f]{8}[-\s]+(.+)$/i);
+    if (nameMatch) {
+      friendlyName = nameMatch[1];
+    }
+    return {
+      userHash,
+      friendlyId,
+      friendlyName,
+      isNamespaced: true
+    };
+  }
+  return {
+    userHash: null,
+    friendlyId: sessionId,
+    friendlyName: sessionName || '',
+    isNamespaced: false
+  };
+}
+
 export default function SessionsTab({ sessions, onRefreshSessions, selectedSessionId, setSelectedSessionId }) {
   const [platform, setPlatform] = useState('whatsapp');
   const [name, setName] = useState('');
@@ -142,13 +169,14 @@ export default function SessionsTab({ sessions, onRefreshSessions, selectedSessi
   };
 
   const buildSettingsNote = (webhook, sessionId) => {
+    const { friendlyId } = parseSessionInfo(sessionId, sessionId);
     if (!webhook.enabled) {
-      return `Webhook desativado para a sessão ${sessionId}.`;
+      return `Webhook desativado para a sessão ${friendlyId}.`;
     }
     if (!webhook.url) {
-      return `Webhook ativo, mas sem URL configurada para a sessão ${sessionId}.`;
+      return `Webhook ativo, mas sem URL configurada para a sessão ${friendlyId}.`;
     }
-    return `Webhook ativo para a sessão ${sessionId}. Novas mensagens serão enviadas para a URL configurada.`;
+    return `Webhook ativo para a sessão ${friendlyId}. Novas mensagens serão enviadas para a URL configurada.`;
   };
 
   const handleCreateSession = async (e) => {
@@ -427,24 +455,42 @@ export default function SessionsTab({ sessions, onRefreshSessions, selectedSessi
           {sessions.length === 0 ? (
             <div className="empty-message">Nenhuma sessão criada.</div>
           ) : (
-            sessions.map((session) => (
-              <div
-                key={session.id}
-                className={`session-list-item ${selectedSessionId === session.id ? 'active' : ''}`}
-                onClick={() => setSelectedSessionId(session.id)}
-              >
-                <div className="session-item-header">
-                  <span className="session-item-name">{session.name}</span>
-                  <span className={`badge ${getStatusBadgeClass(session.snapshot?.status || 'idle')}`}>
-                    {formatStatus(session.snapshot?.status || 'idle')}
-                  </span>
+            sessions.map((session) => {
+              const { userHash, friendlyId, friendlyName, isNamespaced } = parseSessionInfo(session.id, session.name);
+              return (
+                <div
+                  key={session.id}
+                  className={`session-list-item ${selectedSessionId === session.id ? 'active' : ''}`}
+                  onClick={() => setSelectedSessionId(session.id)}
+                >
+                  <div className="session-item-header">
+                    <span className="session-item-name">{friendlyName}</span>
+                    <span className={`badge ${getStatusBadgeClass(session.snapshot?.status || 'idle')}`}>
+                      {formatStatus(session.snapshot?.status || 'idle')}
+                    </span>
+                  </div>
+                  <div className="session-item-meta">
+                    <span style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px' }}>
+                      ID: {friendlyId}
+                      {isNamespaced && (
+                        <span style={{
+                          fontSize: '0.7rem',
+                          padding: '1px 6px',
+                          backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                          color: '#60a5fa',
+                          borderRadius: '4px',
+                          fontWeight: '600',
+                          fontFamily: 'monospace'
+                        }} title={`Pertence ao usuário com hash ${userHash}`}>
+                          {userHash}
+                        </span>
+                      )}
+                    </span>
+                    <span className="platform-tag">{session.platform || 'whatsapp'}</span>
+                  </div>
                 </div>
-                <div className="session-item-meta">
-                  <span>ID: {session.id}</span>
-                  <span className="platform-tag">{session.platform || 'whatsapp'}</span>
-                </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </div>
@@ -454,7 +500,7 @@ export default function SessionsTab({ sessions, onRefreshSessions, selectedSessi
           <div className="session-details-layout">
             <div className="details-header glass-panel">
               <div className="details-title-row">
-                <h2>{selectedSession.name}</h2>
+                <h2>{parseSessionInfo(selectedSession.id, selectedSession.name).friendlyName}</h2>
                 <div className="details-actions">
                   {selectedSession.platform !== 'instagram' && selectedSession.snapshot?.status !== 'connected' && (
                     <button 

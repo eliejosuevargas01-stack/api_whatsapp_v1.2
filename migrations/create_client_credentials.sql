@@ -7,7 +7,7 @@ CREATE TABLE client_credentials (
     -- HASH gerado pelo Bcrypt (nunca armazenar texto limpo)
     client_secret_hash VARCHAR(255) NOT NULL,
     -- Identificador externo (ex: "user_99")
-    external_user_id VARCHAR(50) NOT NULL,
+    external_user_id VARCHAR(50) NOT NULL UNIQUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );

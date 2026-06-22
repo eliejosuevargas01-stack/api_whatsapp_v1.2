@@ -527,19 +527,35 @@ app.post("/api/v1/clients/provision", async (request, reply) => {
       );
     }
 
-    // 2. Criar credenciais M2M
-    console.log(`[M2M Provision] Criando novas credenciais M2M (client_id e client_secret)...`);
+    // 2. Criar ou atualizar credenciais M2M
+    console.log(`[M2M Provision] Configurando credenciais M2M (client_id e client_secret) para "${email}"...`);
     const clientSecret = crypto.randomBytes(32).toString("hex");
     const clientSecretHash = await bcrypt.hash(clientSecret, 12);
 
-    console.log(`[M2M Provision] Gravando credenciais no banco de dados para email = "${email}"...`);
-    const result = await query(
-      `INSERT INTO client_credentials (client_secret_hash, external_user_id) VALUES ($1, $2) RETURNING client_id`,
-      [clientSecretHash, email]
+    // Verificar se já existe credencial para este usuário
+    const existingCred = await query(
+      "SELECT client_id FROM client_credentials WHERE external_user_id = $1",
+      [email]
     );
-    const { client_id } = result.rows[0];
 
-    console.log(`[M2M Provision] Credenciais armazenadas com sucesso. client_id = "${client_id}"`);
+    let client_id;
+    if (existingCred.rowCount > 0) {
+      client_id = existingCred.rows[0].client_id;
+      console.log(`[M2M Provision] Credenciais existentes encontradas. Atualizando o secret para manter o client_id imutável: "${client_id}"`);
+      await query(
+        `UPDATE client_credentials SET client_secret_hash = $1 WHERE external_user_id = $2`,
+        [clientSecretHash, email]
+      );
+    } else {
+      console.log(`[M2M Provision] Nenhuma credencial existente. Inserindo novo registro para "${email}"...`);
+      const result = await query(
+        `INSERT INTO client_credentials (client_secret_hash, external_user_id) VALUES ($1, $2) RETURNING client_id`,
+        [clientSecretHash, email]
+      );
+      client_id = result.rows[0].client_id;
+    }
+
+    console.log(`[M2M Provision] Credenciais processadas com sucesso. client_id = "${client_id}"`);
     console.log(`[M2M Provision] Enviando cópia do client_id e client_secret na resposta para o Dominus/Cliente...`);
     return { client_id, client_secret: clientSecret };
   } catch (err) {
@@ -799,13 +815,36 @@ app.post("/oauth/token", async (request, reply) => {
     const access_token = signM2MToken({ sub: tokenSub, email: client.external_user_id, role: userRole });
     const refresh_token = signM2MToken({ sub: tokenSub, email: client.external_user_id, type: "refresh", role: userRole }, "7d");
 
-    // Retornar formato padrão do OAuth2 token response
+    // Obter sessões disponíveis para este usuário
+    const isAdm = userRole === "admin" || tokenSub === "admin" || client.external_user_id === config.adminUsername;
+    let userSessions = [];
+    
+    if (isAdm) {
+      userSessions = Object.keys(stores.sessions.sessions);
+    } else {
+      let hash = 5381;
+      const subStr = String(tokenSub);
+      for (let i = 0; i < subStr.length; i++) {
+        hash = ((hash << 5) + hash) ^ subStr.charCodeAt(i);
+        hash = hash >>> 0;
+      }
+      const prefix = hash.toString(16).padStart(8, '0');
+      const prefixString = `${prefix}-`;
+      userSessions = Object.keys(stores.sessions.sessions).filter(id => id.startsWith(prefixString));
+    }
+
+    // Retornar formato padrão do OAuth2 token response com a lista de sessões
     return {
       access_token,
       expires_in: 3600, // 1h
       token_type: "Bearer",
       refresh_token,
-      scope: "all"
+      scope: "all",
+      sessions: userSessions.map(id => ({
+        id: id,
+        friendly_id: getFriendlySessionName(id),
+        name: stores.sessions.sessions[id]?.name || getFriendlySessionName(id)
+      }))
     };
   } catch (err) {
     app.log.error(err);
@@ -868,6 +907,31 @@ app.addHook("preHandler", async (request, reply) => {
     const isAdm = isAdminToken(reqToken);
 
     if (isMaster || isAdm) {
+      if (sessionManager.hasSession(targetSessionId)) {
+        return;
+      }
+      
+      const targetSlug = slugify(targetSessionId);
+      const allSessionIds = Object.keys(stores.sessions.sessions);
+      const matches = allSessionIds.filter(id => id.endsWith(`-${targetSlug}`) || id === targetSlug);
+      
+      if (matches.length === 1) {
+        const resolvedSessionId = matches[0];
+        console.log(`[Admin Session Resolver] Resolvendo "${targetSessionId}" para a sessão de usuário única: "${resolvedSessionId}"`);
+        
+        if (request.params && request.params.sessionId) {
+          request.params.sessionId = resolvedSessionId;
+        }
+        if (request.params && request.params.username) {
+          request.params.username = resolvedSessionId;
+        }
+        if (request.body && request.body.sessionId) {
+          request.body.sessionId = resolvedSessionId;
+        }
+        if (request.body && request.body.username) {
+          request.body.username = resolvedSessionId;
+        }
+      }
       return;
     }
 

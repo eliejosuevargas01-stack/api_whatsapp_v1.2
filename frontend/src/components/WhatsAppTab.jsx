@@ -328,11 +328,15 @@ export default function WhatsAppTab({ sessions, selectedSessionId, setSelectedSe
             {whatsappSessions.length === 0 ? (
               <option value="">Nenhuma sessão do WhatsApp</option>
             ) : (
-              whatsappSessions.map((session) => (
-                <option key={session.id} value={session.id}>
-                  {session.name} • {formatStatus(session.snapshot?.status)}
-                </option>
-              ))
+              whatsappSessions.map((session) => {
+                const nameMatch = String(session.name).match(/^[0-9a-f]{8}[-\s]+(.+)$/i);
+                const displayName = nameMatch ? nameMatch[1] : session.name;
+                return (
+                  <option key={session.id} value={session.id}>
+                    {displayName} • {formatStatus(session.snapshot?.status)}
+                  </option>
+                );
+              })
             )}
           </select>
         </div>
