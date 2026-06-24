@@ -52,6 +52,7 @@ const config = {
   bodyLimitBytes: Math.max(parseInteger(process.env.BODY_LIMIT_MB, 64), 1) * 1024 * 1024,
   autoConnect: parseBoolean(process.env.AUTO_CONNECT, true),
   syncFullHistory: parseBoolean(process.env.SYNC_FULL_HISTORY, true),
+  typingDelayEnabled: parseBoolean(process.env.TYPING_DELAY_ENABLED, true),
   maxStoredMessages:
     parseInteger(process.env.MAX_STORED_MESSAGES, 0) > 0
       ? parseInteger(process.env.MAX_STORED_MESSAGES, 0)
@@ -2900,6 +2901,25 @@ function createSessionManager({
       }
     };
 
+    const simulateTypingState = async (jid, textContent, isAudio = false) => {
+      if (!config.typingDelayEnabled) {
+        return;
+      }
+      try {
+        const presence = isAudio ? "recording" : "composing";
+        await state.socket.sendPresenceUpdate(presence, jid);
+        
+        const textLength = typeof textContent === "string" ? textContent.length : 0;
+        // 50ms por caractere, no mínimo 1.5s e no máximo 5s
+        const delayMs = Math.min(Math.max(textLength * 50, 1500), 5000);
+        
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        await state.socket.sendPresenceUpdate("paused", jid);
+      } catch (err) {
+        logger.warn({ err, jid }, "Falha ao enviar presence update de digitacao.");
+      }
+    };
+
     const sendText = async (jidInput, text) => {
       if (!state.socket || state.status !== "connected") {
         throw new Error("Sessao nao esta conectada.");
@@ -2907,6 +2927,9 @@ function createSessionManager({
 
       const rawJid = normalizeJidInput(jidInput);
       const jid = await verifyNumberExists(rawJid);
+
+      await simulateTypingState(jid, text, false);
+
       const response = await state.socket.sendMessage(jid, { text });
       const storedMessage = recordMessage(sessionId, {
         id: response?.key?.id || `local_${Date.now()}`,
@@ -2933,6 +2956,10 @@ function createSessionManager({
 
       const rawJid = normalizeJidInput(jidInput);
       const jid = await verifyNumberExists(rawJid);
+
+      const isAudio = payload?.media?.kind === "audio";
+      await simulateTypingState(jid, payload.text || "", isAudio);
+
       const prepared = prepareOutgoingMediaPayload(payload);
       const response = await state.socket.sendMessage(jid, prepared.content);
       const messageId = response?.key?.id || `local_${Date.now()}`;
